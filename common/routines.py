@@ -28,7 +28,7 @@ def test(model, test_loader, device='cuda', move_to_device=True):
 # Training loop
 def train(model, train_loader, optimizer, loss_type=nn.CrossEntropyLoss(), epochs=2000, log_rate=100, 
           test_during_epoch=False, test_batch_freq=1, test_during_epoch_callback=None, device='cuda', 
-          gradient_update_function=None, replay_strategy=None, move_to_device=True):
+          gradient_update_function=None, replay_strategy=None, move_to_device=True, dont_log=False):
     
     model = model.to(device)
 
@@ -83,7 +83,7 @@ def train(model, train_loader, optimizer, loss_type=nn.CrossEntropyLoss(), epoch
             total_batch_number += 1
         
         # Print average loss every log_rate epochs
-        if epoch % log_rate == log_rate - 1:
+        if epoch % log_rate == log_rate - 1 and not dont_log:
             print(f'    Epoch {epoch + 1}, Loss: {running_loss / log_rate}, Train accuracy: {running_corrects / running_total}')
             running_loss = 0.0
             running_corrects = 0

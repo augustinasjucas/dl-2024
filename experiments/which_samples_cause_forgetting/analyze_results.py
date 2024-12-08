@@ -55,29 +55,33 @@ def main():
 
     # Find the indiceces of top 25 and bottom 25 elements in accuracies
     indices = np.argsort(mean_accs)
-    top_25 = indices[-25:]
-    bottom_25 = indices[:25]
+    top_25 = indices[-36:][::-1]
+    bottom_25 = indices[:36]
+
+    print("mean accs", mean_accs[top_25])
+    print("mean accs", mean_accs[bottom_25])
 
     # Plot the top 25 and bottom 25 elements: create two 5x5 grids
 
     # Top 25
-    fig, axs1 = plt.subplots(5, 5)
+    fig, axs1 = plt.subplots(6, 6, figsize=(7, 7))
     for i, ax in enumerate(axs1.flat):
         im = (dataset[top_25[i]][0].permute(1, 2, 0) + 1) / 2
         ax.imshow(im.cpu().numpy())
-        ax.set_title(f"Acc diff: {mean_accs[top_25[i]]:.2f}, Loss diff: {mean_losses[top_25[i]]:.2f}", fontsize=4)
+        ax.set_title(f"Acc diff: {mean_accs[top_25[i]]:.2f}, Loss diff: {mean_losses[top_25[i]]:.2f}", fontsize=5)
         ax.axis('off')
     plt.suptitle("Top 25 elements in accuracy")
+    plt.subplots_adjust(top=0.92, bottom=0.02, left=0.0, right=1.0, hspace=0.25, wspace=0.0)
 
     # Bottom 25
-    fig2, axs2 = plt.subplots(5, 5)
+    fig2, axs2 = plt.subplots(6, 6, figsize=(7, 7))
     for i, ax in enumerate(axs2.flat):
         im = (dataset[bottom_25[i]][0].permute(1, 2, 0) + 1) / 2
         ax.imshow(im.cpu().numpy())
-        ax.set_title(f"Acc diff: {mean_accs[bottom_25[i]]:.2f}, Loss diff: {mean_losses[bottom_25[i]]:.2f}", fontsize=4)
+        ax.set_title(f"Acc diff: {mean_accs[bottom_25[i]]:.2f}, Loss diff: {mean_losses[bottom_25[i]]:.2f}", fontsize=5)
         ax.axis('off')
     plt.suptitle("Bottom 25 elements in accuracy")
-
+    plt.subplots_adjust(top=0.92, bottom=0.02, left=0.0, right=1.0, hspace=0.25, wspace=0.0)
     plt.show()
 
 

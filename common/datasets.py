@@ -14,17 +14,37 @@ def get_mnist():
 
     return full_train_dataset, full_test_dataset
 
-def get_cifar():
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,))
-    ])
-    # Download and load CIFAR-100
-    full_train_dataset_cifar100 = datasets.CIFAR100(root='./data', train=True, download=True, transform=transform)
-    full_test_dataset_cifar100 = datasets.CIFAR100(root='./data', train=False, download=True, transform=transform)
+def get_cifar(version='10'):
+    """
+    Args:
+        version (str): '10' for CIFAR-10 or '100' for 'CIFAR-100'
+    """
+    if version == '10':
+        mean = torch.tensor([0.4914, 0.4822, 0.4465])
+        std = torch.tensor([0.2470, 0.2435, 0.2616])
 
-    return full_train_dataset_cifar100, full_test_dataset_cifar100
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std)
+        ])
 
+        full_train_dataset = datasets.CIFAR10(root='data/', train=True, download=True, transform=transform)
+        full_test_dataset = datasets.CIFAR10(root='data/', train=False, download=True, transform=transform)
+    elif version == '100':
+        mean = torch.tensor([0.5071, 0.4867, 0.4408])
+        std = torch.tensor([0.2675, 0.2565, 0.2761])
+
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std)
+        ])
+        # Download and load CIFAR-100
+        full_train_dataset = datasets.CIFAR100(root='./data', train=True, download=True, transform=transform)
+        full_test_dataset = datasets.CIFAR100(root='./data', train=False, download=True, transform=transform)
+    else:
+        raise Exception('Unrecognized version: Pick CIFAR 10 or 100')
+
+    return full_train_dataset, full_test_dataset
 
 
 # Define a class for storing tasks split. It stores training dataset and validation dataset.

@@ -79,7 +79,7 @@ class ResNet(nn.Module):
     def __init__(self, num_tasks, classes_each_task, in_channels):
         """
         Args:
-            num_tasks (list[int]): number of tasks that will be run (used to decide number of heads in multi-head setup)
+            num_tasks (int): number of tasks that will be run (used to decide number of heads in multi-head setup)
             classes_each_task (list[int]): classes_each_task[i] = number of classes for task i (used to determine logit size)
             in_channels (int): the initial number of channels (since it can differ depending on dataset)
         """
@@ -113,5 +113,35 @@ class ResNet(nn.Module):
         x = self.init_conv(x)
         x = self.res_layers(x)
         x = x.flatten(1)
+        out = self.heads[task](x)
+        return out
+
+# Basically just the CNN defined above but multihead for semantics
+class SemanticCNN(nn.Module):
+    def __init__(self, num_tasks, classes_each_task, in_channels):
+        super().__init__()
+        self.conv_blocks = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2)
+        )
+        self.dropout = nn.Dropout(0.5)
+        self.heads = nn.ModuleList(
+            [nn.LazyLinear(classes_each_task[i]) for i in range(num_tasks)]
+        )
+
+    def forward(self, x, task):
+        x = self.conv_blocks(x)
+        x = x.flatten(1)
+        x = self.dropout(x)
         out = self.heads[task](x)
         return out

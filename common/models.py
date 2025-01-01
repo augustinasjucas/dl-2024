@@ -21,7 +21,7 @@ class MLP(nn.Module):
         x = self.fc3(x)                      # Output layer
         x = self.softmax(x)                  # Apply softmax activation to output
         return x
-    
+
 class CNN(nn.Module):
     def __init__(self):
         super(CNN, self).__init__()
@@ -72,7 +72,7 @@ class ResNetBlock(nn.Module):
         out = nn.functional.relu(out)
         return out
 
-# This model has multi-head capabilities. 
+# This model has multi-head capabilities.
 # To use a single head, set num_tasks = [1] (yes this is a little hacky, sorry)
 # and set classes_each_task = [total number of classes] (e.g. [10] for CIFAR10)
 class ResNet(nn.Module):
@@ -145,3 +145,27 @@ class SemanticCNN(nn.Module):
         x = self.dropout(x)
         out = self.heads[task](x)
         return out
+
+
+
+class CIFAR_CNN_1(torch.nn.Module):
+    def __init__(self):
+        super(CIFAR_CNN_1, self).__init__()
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.fc1 = nn.Linear(64 * 4 * 4, 64)
+        self.fc2 = nn.Linear(64, 100)
+        self.dropout = nn.Dropout(0.5)
+        self.pool = nn.MaxPool2d(2, 2)
+
+    def forward(self, x):
+        x = self.pool(torch.relu(self.conv1(x)))
+        x = self.pool(torch.relu(self.conv2(x)))
+        x = self.pool(torch.relu(self.conv3(x)))
+        x = x.view(-1, 64 * 4 * 4)
+        x = torch.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+

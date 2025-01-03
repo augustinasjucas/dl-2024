@@ -6,18 +6,20 @@ from torch.utils.data import DataLoader
 from common.utils import simple_train, simple_test
 import wandb
 
+
 class FlorianProbing(Metric):
-    def __init__(self,
-                 layers_order: List[ Tuple[List[torch.nn.Module], str]],
-                 all_layers: List[torch.nn.Module],
-                 optimizer: Tuple[torch.optim.Optimizer, dict],
-                 criterion: torch.nn.Module,
-                 epochs: int,
-                 batch_size: int = 256,
-                 device: str = "cuda",
-                 wandb_params: dict = None,
-                 sweepy_logging: bool = False
-            ):
+    def __init__(
+        self,
+        layers_order: List[Tuple[List[torch.nn.Module], str]],
+        all_layers: List[torch.nn.Module],
+        optimizer: Tuple[torch.optim.Optimizer, dict],
+        criterion: torch.nn.Module,
+        epochs: int,
+        batch_size: int = 256,
+        device: str = "cuda",
+        wandb_params: dict = None,
+        sweepy_logging: bool = False,
+    ):
         """
         ==== NOTE: it is CRUCIAL that you dont change the "model" class inside. For instance, do not change the code of this class to model = model.to(device).
                    Do all of the model.to(device) before passing the model to this function. That is because the layers_order must retain the references to the original model ====
@@ -50,22 +52,30 @@ class FlorianProbing(Metric):
             """
             After training the model on all CL tasks in a row, this metrics does this:
                 1. Iterates one by one over the layers of the model.
-                    1. On the ith iteration, it sets the weights of all layers 0-i to the ones they had after training after training on all tasks
+                    1. On the ith iteration, it sets the weights of all layers 0-i to the ones they had after training on all tasks
                     and the remaining layers are just reinitialized.
                     2. The first i layers are then frozen.
                     3. Then, this model is trained on ALL data from ALL tasks (not in a CL way, just normally).
                     4. The test data of all tasks is then passed through the model, and the loss and accuracy are computed.
                     5. This is the score that is returned for this layer.
                 2. We return a list of scores, one for each layer.
-            """
+            """,
         )
         self.results = []
 
     def after_all_tasks(self, model, tasks: List[Tuple[DataLoader, DataLoader]]):
 
         # Construct a full train and test loader with all data from all tasks
-        full_train_loader = DataLoader(torch.utils.data.ConcatDataset([task[0].dataset for task in tasks]), batch_size=self.batch_size, shuffle=True)
-        full_test_loader = DataLoader(torch.utils.data.ConcatDataset([task[1].dataset for task in tasks]), batch_size=self.batch_size, shuffle=True)
+        full_train_loader = DataLoader(
+            torch.utils.data.ConcatDataset([task[0].dataset for task in tasks]),
+            batch_size=self.batch_size,
+            shuffle=True,
+        )
+        full_test_loader = DataLoader(
+            torch.utils.data.ConcatDataset([task[1].dataset for task in tasks]),
+            batch_size=self.batch_size,
+            shuffle=True,
+        )
 
         all_layers_to_freeze = []
 
@@ -92,18 +102,30 @@ class FlorianProbing(Metric):
 
             # now train the model on all data from all tasks
             optimizer = self.optimizer[0](model.parameters(), **self.optimizer[1])
-            simple_train(model, full_train_loader, optimizer, self.criterion, self.epochs, self.device, f"metrics-florian_probing/intermediate-training-results/{sweepy_string}")
-            loss, acc  = simple_test(model, full_test_loader,  self.criterion, self.device)
-            loss_train, acc_train = simple_test(model, full_train_loader,  self.criterion, self.device)
+            simple_train(
+                model,
+                full_train_loader,
+                optimizer,
+                self.criterion,
+                self.epochs,
+                self.device,
+                f"metrics-florian_probing/intermediate-training-results/{sweepy_string}",
+            )
+            loss, acc = simple_test(model, full_test_loader, self.criterion, self.device)
+            loss_train, acc_train = simple_test(model, full_train_loader, self.criterion, self.device)
 
             # append the results
             self.results.append((name, acc, loss, acc_train, loss_train))
 
-            wandb.log({
-                f"metrics-florian_probing/final-results/{sweepy_string}test-accuracy": acc, f"metrics-florian_probing/final-results/{sweepy_string}test-loss": loss,
-                f"metrics-florian_probing/final-results/{sweepy_string}train-accuracy": acc_train, f"metrics-florian_probing/final-results/{sweepy_string}train-loss": loss_train,
-                f"metrics-florian_probing/final-results/{sweepy_string}layer-index": len(self.results) - 1
-            })
+            wandb.log(
+                {
+                    f"metrics-florian_probing/final-results/{sweepy_string}test-accuracy": acc,
+                    f"metrics-florian_probing/final-results/{sweepy_string}test-loss": loss,
+                    f"metrics-florian_probing/final-results/{sweepy_string}train-accuracy": acc_train,
+                    f"metrics-florian_probing/final-results/{sweepy_string}train-loss": loss_train,
+                    f"metrics-florian_probing/final-results/{sweepy_string}layer-index": len(self.results) - 1,
+                }
+            )
 
             if not self.sweepy_logging:
                 layerwise_training_logger.finish()
@@ -116,7 +138,6 @@ class FlorianProbing(Metric):
     def produce_result(self):
         return self.results
 
-
     def after_task(self, model, task_num, train_loader, test_loader):
         pass
 
@@ -128,7 +149,3 @@ class FlorianProbing(Metric):
 
     def before_task(self, model, task_num, train_loader, test_loader):
         pass
-
-    def after_task(self, model, task_num, train_loader, test_loader):
-        pass
-

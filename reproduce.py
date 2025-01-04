@@ -13,7 +13,7 @@ def main():
     # Here, define the common wandb parameters that will be called on wandb.init() in the CLTraining and
     # possibly other metrics.
     wandb_params = {
-        "project": "reproducing-florians-experiment-test-3",
+        "project": "reproducing-florians-experiment-test-6",
         "entity": "continual-learning-2024",
     }
 

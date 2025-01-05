@@ -1,11 +1,9 @@
 import torch
 import wandb
 from common.metrics import Metric
-from torch.utils.data import DataLoader
 import numpy as np
-import random
 from sklearn.metrics.pairwise import cosine_similarity
-from collections import defaultdict
+import matplotlib.pyplot as plt
 
 
 class GradientAlignment(Metric):
@@ -36,7 +34,7 @@ class GradientAlignment(Metric):
         self.wandb_params = wandb_params
 
         self.gradients = None
-        self.results = []
+        self.results = None
 
     def _get_random_batch(self, loader):
         """
@@ -75,50 +73,123 @@ class GradientAlignment(Metric):
         Called after every epoch. We'll do gradient alignment check if
         by_epoch=True and (epoch_num % check_every == 0).
         """
-        if (epoch_num + 1) % self.check_every == 0:  # +1 for 1-based
-            # We only measure once per epoch across tasks.
-            # If you want this done per-task, you can move this call to after_task
-            self._do_measurement(model, epoch_num)
+        if (epoch_num + 1) % self.check_every == 0:
+            # Save the current model state for safe reversion
+            # so that these gradient computations don't affect the actual training.
+            current_state = {k: v.clone() for k, v in model.state_dict().items()}
 
-    def _do_measurement(self, model, epoch_num):
-        # Save the current model state for safe reversion
-        # so that these gradient computations don't affect the actual training.
-        current_state = {k: v.clone() for k, v in model.state_dict().items()}
+            # Put model in train mode, just in case
+            model.train()
 
-        # Put model in train mode, just in case
-        model.train()
+            # For each task, get random batch, compute gradient
+            gradients_list = []
+            for loader in self.task_train_loaders:
+                x, y = self._get_random_batch(loader)
+                g = self._compute_gradient(model, x, y)
+                gradients_list.append(g.detach().cpu().numpy())
 
-        # For each task, get random batch, compute gradient
-        gradients_list = []
-        for loader in self.task_train_loaders:
-            x, y = self._get_random_batch(loader)
-            g = self._compute_gradient(model, x, y)
-            gradients_list.append(g.detach().cpu().numpy())
+                # restore model weights after each gradient so we don't accumulate
+                model.load_state_dict(current_state)
 
-            # restore model weights after each gradient so we don't accumulate
+            new_gradients = np.array(gradients_list)
+            new_gradients = np.expand_dims(new_gradients, axis=0)
+
+            if self.gradients is not None:
+                self.gradients = np.concatenate((self.gradients, new_gradients), axis=0)
+            else:
+                self.gradients = new_gradients
+
+            # Finally, restore model to original state
             model.load_state_dict(current_state)
 
-        new_gradients = np.array(gradients_list)
-        new_gradients = np.expand_dims(new_gradients, axis=0)
-
-        if self.gradients is not None:
-            for i in range(len(self.task_train_loaders)):
-                intra_task_similarity = cosine_similarity(self.gradients[:, i, :], new_gradients[:, i, :]).mean()
-                self.results.append((f"task-{i}", epoch_num, intra_task_similarity))
-            self.gradients = np.concatenate((self.gradients, new_gradients), axis=0)
-        else:
-            self.gradients = new_gradients
-
-        # Finally, restore model to original state
-        model.load_state_dict(current_state)
-
     def after_all_tasks(self, model, tasks):
-        for i in range(len(self.task_train_loaders)):
+        num_tasks = len(self.task_train_loaders)
+        avg_similarities = np.zeros((num_tasks, num_tasks))
+        for i in range(num_tasks):
+            for j in range(num_tasks):
+                similarities = cosine_similarity(self.gradients[:, i, :], self.gradients[:, j, :])
+                if i == j:
+                    # exclude self-similarity
+                    mask = np.ones(similarities.shape, dtype=bool)
+                    np.fill_diagonal(mask, 0)
+                    avg_similarities[i][j] = np.mean(similarities[mask])
+                else:
+                    avg_similarities[i][j] = np.mean(similarities)
+
+        self.results = avg_similarities
+
+        fig, ax = plt.subplots(figsize=(4, 3), dpi=300)  # High DPI for clearer image
+        cax = ax.matshow(
+            avg_similarities, cmap="viridis", interpolation="none"
+        )  # Default colormap optimized for matrix data
+        fig.colorbar(cax)
+        ax.set_title("Average cosine similarity of gradients between tasks")
+        ax.set_xlabel("Task index")
+        ax.set_ylabel("Task index")
+        ax.set_xticks(range(num_tasks))
+        ax.set_yticks(range(num_tasks))
+
+        plt.savefig("data/gradient_similarities.png", dpi=300)
+
+        heatmap_logger = wandb.init(**self.wandb_params, name="gradient-alignment")
+        wandb.log({"metrics-gradients/heatmap": wandb.Image("data/gradient_similarities.png")})
+        heatmap_logger.finish()
+
+        similarities_evolution = []
+        for i in range(self.gradients.shape[0]):
+            similarities = cosine_similarity(self.gradients[i, :, :])
+            similarities_evolution.append(similarities)
+
+        for i in range(num_tasks):
+            # Initialize a new W&B run for each task
             taskwise_training_logger = wandb.init(**self.wandb_params, name=f"task-{i}")
-            for task_id, epoch_num, sim in self.results:
-                if task_id == f"task-{i}":
-                    wandb.log({"gradient_alignment": sim}, step=epoch_num)
+
+            # Define a global step metric used by all metrics
+            global_step_name = "metrics-gradients/measurement-step"
+            wandb.define_metric(global_step_name)
+            for j in range(num_tasks):
+                metric_name = f"metrics-gradients/task-{j}"
+                wandb.define_metric(metric_name, step_metric=global_step_name)
+
+            # Log data
+            for k in range(self.gradients.shape[0]):  # Use the outer loop for the global step
+                for j in range(num_tasks):
+                    if i != j:
+                        metric_name = f"metrics-gradients/task-{j}"
+                        log_data = {
+                            metric_name: similarities_evolution[k][i, j],
+                            global_step_name: k,  # Log the global step for this metric
+                        }
+                        wandb.log(log_data)
+
+            # Finish the run after all logging is complete
             taskwise_training_logger.finish()
+
+        # for i in range(num_tasks):
+        #     # Initialize a new W&B run for each task
+        #     taskwise_training_logger = wandb.init(**self.wandb_params, name=f"task-{i}")
+
+        #     # Define metrics once per session
+        #     for j in range(num_tasks):
+        #         if i != j:
+        #             metric_name = f"metrics-gradients/task-{j}"
+        #             step_name = f"step/task-{j}"
+        #             wandb.define_metric(metric_name, step_metric=step_name)
+        #             wandb.define_metric(step_name)  # Define the step metric explicitly
+
+        #     # Log data
+        #     for j in range(num_tasks):
+        #         if i != j:
+        #             for k in range(self.gradients.shape[0]):
+        #                 # Log data with correct step for each metric
+        #                 log_data = {
+        #                     f"metrics-gradients/task-{j}": similarities_evolution[k][i, j],
+        #                     f"step/task-{j}": k,  # Correct step for this task and metric
+        #                 }
+        #                 wandb.log(log_data)  # Log immediately with the correct step
+
+        #     # Finish the run after logging
+        #     taskwise_training_logger.finish()
 
     def produce_result(self):
         """

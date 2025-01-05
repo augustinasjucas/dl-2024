@@ -165,32 +165,6 @@ class GradientAlignment(Metric):
             # Finish the run after all logging is complete
             taskwise_training_logger.finish()
 
-        # for i in range(num_tasks):
-        #     # Initialize a new W&B run for each task
-        #     taskwise_training_logger = wandb.init(**self.wandb_params, name=f"task-{i}")
-
-        #     # Define metrics once per session
-        #     for j in range(num_tasks):
-        #         if i != j:
-        #             metric_name = f"metrics-gradients/task-{j}"
-        #             step_name = f"step/task-{j}"
-        #             wandb.define_metric(metric_name, step_metric=step_name)
-        #             wandb.define_metric(step_name)  # Define the step metric explicitly
-
-        #     # Log data
-        #     for j in range(num_tasks):
-        #         if i != j:
-        #             for k in range(self.gradients.shape[0]):
-        #                 # Log data with correct step for each metric
-        #                 log_data = {
-        #                     f"metrics-gradients/task-{j}": similarities_evolution[k][i, j],
-        #                     f"step/task-{j}": k,  # Correct step for this task and metric
-        #                 }
-        #                 wandb.log(log_data)  # Log immediately with the correct step
-
-        #     # Finish the run after logging
-        #     taskwise_training_logger.finish()
-
     def produce_result(self):
         """
         Return all the angles we collected for post-processing or printing.

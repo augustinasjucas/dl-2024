@@ -17,14 +17,8 @@ class GradientAlignment(Metric):
     ):
         """
         A metric that computes pairwise angles between gradients from each task.
-
-        Args:
-            task_train_loaders: list of train loaders, one per task.
-            criterion: the loss function to use in computing gradients.
-            device: "cuda" or "cpu".
-            check_every: check frequency (every 'n' steps or epochs).
-            by_epoch: if True, check every 'n' epochs, else every 'n' batches.
-            wandb_params: parameters for logging to W&B.
+        Additionally, it can measure the gradient magnitude at the start of each task
+        to get a sense of transfer (possibly normalized by parameter norm).
         """
         super().__init__("Gradient Alignment", "")
         self.task_train_loaders = task_train_loaders
@@ -36,12 +30,14 @@ class GradientAlignment(Metric):
         self.gradients = None
         self.results = None
 
+        # Store gradient magnitudes at the beginning of each task.
+        self.initial_gradient_magnitudes_normalized = []
+        self.initial_gradient_magnitudes = []
+
     def _get_random_batch(self, loader):
         """
         Utility to grab a random batch from a DataLoader.
         """
-        # There's more than one way to do this; for large datasets, you might
-        # just do next(iter(loader)) or sample a random index. For simplicity:
         data_iter = iter(loader)
         x, y = next(data_iter)
         return x.to(self.device), y.to(self.device)
@@ -71,11 +67,10 @@ class GradientAlignment(Metric):
     def after_epoch(self, model, task_num, epoch_num):
         """
         Called after every epoch. We'll do gradient alignment check if
-        by_epoch=True and (epoch_num % check_every == 0).
+        (epoch_num + 1) % check_every == 0.
         """
         if (epoch_num + 1) % self.check_every == 0:
             # Save the current model state for safe reversion
-            # so that these gradient computations don't affect the actual training.
             current_state = {k: v.clone() for k, v in model.state_dict().items()}
 
             # Put model in train mode, just in case
@@ -102,9 +97,47 @@ class GradientAlignment(Metric):
             # Finally, restore model to original state
             model.load_state_dict(current_state)
 
+    def before_task(self, model, task_num, train_loader, test_loader):
+        """
+        Called before each new task begins. We measure the gradient magnitude on
+        this new task (using a random batch), normalized by the parameter norm.
+        """
+        # Save the current model state for safe reversion
+        current_state = {k: v.clone() for k, v in model.state_dict().items()}
+
+        model.train()
+        x, y = self._get_random_batch(train_loader)
+        g = self._compute_gradient(model, x, y)
+
+        # Compute norms
+        with torch.no_grad():
+            param_norm = 0.0
+            for p in model.parameters():
+                param_norm += p.data.norm() ** 2
+            param_norm = param_norm.sqrt()
+
+            grad_norm = g.norm()
+            grad_norm_normalized = grad_norm / (param_norm + 1e-8)  # Avoid div by zero
+
+        self.initial_gradient_magnitudes_normalized.append(grad_norm_normalized.item())
+        self.initial_gradient_magnitudes.append(grad_norm.item())
+
+        # Restore model weights
+        model.load_state_dict(current_state)
+
+    def after_task(self, model, task_num, train_loader, test_loader):
+        pass
+
     def after_all_tasks(self, model, tasks):
+        """
+        Called once after all tasks are completed. We compute the average
+        pairwise cosine similarities for each task pair. We also log the
+        initial gradient magnitudes we recorded.
+        """
         num_tasks = len(self.task_train_loaders)
         avg_similarities = np.zeros((num_tasks, num_tasks))
+
+        # Compute average pairwise similarities
         for i in range(num_tasks):
             for j in range(num_tasks):
                 similarities = cosine_similarity(self.gradients[:, i, :], self.gradients[:, j, :])
@@ -118,10 +151,9 @@ class GradientAlignment(Metric):
 
         self.results = avg_similarities
 
-        fig, ax = plt.subplots(figsize=(4, 3), dpi=300)  # High DPI for clearer image
-        cax = ax.matshow(
-            avg_similarities, cmap="viridis", interpolation="none"
-        )  # Default colormap optimized for matrix data
+        # Plot the heatmap
+        fig, ax = plt.subplots(figsize=(4, 3), dpi=300)
+        cax = ax.matshow(avg_similarities, cmap="viridis", interpolation="none")
         fig.colorbar(cax)
         ax.set_title("Average cosine similarity of gradients between tasks")
         ax.set_xlabel("Task index")
@@ -131,38 +163,48 @@ class GradientAlignment(Metric):
 
         plt.savefig("data/gradient_similarities.png", dpi=300)
 
+        # Log the heatmap
         heatmap_logger = wandb.init(**self.wandb_params, name="gradient-alignment")
         wandb.log({"metrics-gradients/heatmap": wandb.Image("data/gradient_similarities.png")})
         heatmap_logger.finish()
 
+        # Track how similarities evolved over time
         similarities_evolution = []
         for i in range(self.gradients.shape[0]):
             similarities = cosine_similarity(self.gradients[i, :, :])
             similarities_evolution.append(similarities)
 
+        # Detailed logging per task
         for i in range(num_tasks):
-            # Initialize a new W&B run for each task
             taskwise_training_logger = wandb.init(**self.wandb_params, name=f"task-{i}")
-
-            # Define a global step metric used by all metrics
             global_step_name = "metrics-gradients/measurement-step"
             wandb.define_metric(global_step_name)
+
+            wandb.log(
+                {
+                    f"metrics-gradients/initial_magnitude_normalized": self.initial_gradient_magnitudes_normalized[i],
+                },
+            )
+            wandb.log(
+                {
+                    f"metrics-gradients/initial_magnitude": self.initial_gradient_magnitudes[i],
+                },
+            )
+
             for j in range(num_tasks):
                 metric_name = f"metrics-gradients/task-{j}"
                 wandb.define_metric(metric_name, step_metric=global_step_name)
 
-            # Log data
-            for k in range(self.gradients.shape[0]):  # Use the outer loop for the global step
+            for k in range(self.gradients.shape[0]):  # Outer loop for the global step
                 for j in range(num_tasks):
                     if i != j:
                         metric_name = f"metrics-gradients/task-{j}"
                         log_data = {
                             metric_name: similarities_evolution[k][i, j],
-                            global_step_name: k,  # Log the global step for this metric
+                            global_step_name: k,
                         }
                         wandb.log(log_data)
 
-            # Finish the run after all logging is complete
             taskwise_training_logger.finish()
 
     def produce_result(self):
@@ -170,9 +212,3 @@ class GradientAlignment(Metric):
         Return all the angles we collected for post-processing or printing.
         """
         return self.results
-
-    def before_task(self, model, task_num, train_loader, test_loader):
-        pass
-
-    def after_task(self, model, task_num, train_loader, test_loader):
-        pass

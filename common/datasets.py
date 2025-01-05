@@ -72,10 +72,9 @@ class Tasks():
             test_loaders.append(DataLoader(dataset, batch_size=batch_size, shuffle=False))
         return test_loaders
 
-    def get_tasks_zipped(self, batch_size):
+    def get_tasks_zipped(self, batch_size, shuffle_train=False):
         # zips the train and test loaders
-        return list(zip(self.get_train_loaders(batch_size), self.get_test_loaders(batch_size)))
-
+        return list(zip(self.get_train_loaders(batch_size, shuffle=shuffle_train), self.get_test_loaders(batch_size)))
 
     def get_task_name(self, i):
         return self.names[i]
@@ -161,7 +160,6 @@ class FiftyImageTasksCifar(Tasks):
             class_name = ", ".join([dataset.classes[j] for j in range(i, i+50)])
             self.names.append(class_name)
         return datasets
-
 
 class GPUDataset(torch.utils.data.Dataset):
     def __init__(self, dataset):

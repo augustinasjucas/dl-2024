@@ -116,7 +116,6 @@ class FlorianProbing(Metric):
     def produce_result(self):
         return self.results
 
-
     def after_task(self, model, task_num, train_loader, test_loader):
         pass
 
@@ -129,6 +128,5 @@ class FlorianProbing(Metric):
     def before_task(self, model, task_num, train_loader, test_loader):
         pass
 
-    def after_task(self, model, task_num, train_loader, test_loader):
-        pass
+
 

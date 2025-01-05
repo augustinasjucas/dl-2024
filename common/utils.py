@@ -3,6 +3,7 @@ from torch.utils.data import DataLoader
 import copy
 import wandb
 
+
 def simple_test(model: torch.nn.Module, test_loader: DataLoader, criterion, device: str):
     # Reports the average loss and accuracy of the model on the test set
     model.eval()

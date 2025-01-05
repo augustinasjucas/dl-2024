@@ -4,16 +4,18 @@ from common.metrics import Metric
 from torch.utils.data import DataLoader
 import numpy as np
 import random
+from sklearn.metrics.pairwise import cosine_similarity
+from collections import defaultdict
 
 
-class GradientAlignmentMetric(Metric):
+class GradientAlignment(Metric):
     def __init__(
         self,
         task_train_loaders,  # List of DataLoader, one for each task
         criterion,  # e.g. torch.nn.CrossEntropyLoss()
         device="cuda",
-        check_every=1,  # how often to check (every 'n' epochs or steps)
-        by_epoch=True,  # if True, do it after each epoch; if False, do it after each batch
+        check_every=1,  # how often to check (every 'n' epochs)
+        wandb_params: dict = None,
     ):
         """
         A metric that computes pairwise angles between gradients from each task.
@@ -24,15 +26,16 @@ class GradientAlignmentMetric(Metric):
             device: "cuda" or "cpu".
             check_every: check frequency (every 'n' steps or epochs).
             by_epoch: if True, check every 'n' epochs, else every 'n' batches.
+            wandb_params: parameters for logging to W&B.
         """
         super().__init__("Gradient Alignment", "")
         self.task_train_loaders = task_train_loaders
         self.criterion = criterion
         self.device = device
         self.check_every = check_every
-        self.by_epoch = by_epoch
+        self.wandb_params = wandb_params
 
-        # We'll store our results (angles) here
+        self.gradients = None
         self.results = []
 
     def _get_random_batch(self, loader):
@@ -67,46 +70,17 @@ class GradientAlignmentMetric(Metric):
                 grads.append(p.grad.view(-1))
         return torch.cat(grads, dim=0)
 
-    def _compute_pairwise_angles(self, grad_list):
-        """
-        Given a list of gradient vectors [g1, g2, ..., gT],
-        compute pairwise angles and return the average angle.
-        """
-        angles = []
-        T = len(grad_list)
-        for i in range(T):
-            for j in range(i + 1, T):
-                dot_ij = torch.dot(grad_list[i], grad_list[j])
-                norm_i = grad_list[i].norm()
-                norm_j = grad_list[j].norm()
-                cosine_ij = (dot_ij / (norm_i * norm_j)).clamp(-1.0, 1.0)  # avoid floating errors
-                angle_ij = torch.acos(cosine_ij).item()  # in radians
-                angles.append(angle_ij)
-        if len(angles) == 0:
-            return 0.0
-        return float(np.mean(angles))  # average angle in radians
-
-    def after_batch(self, model, task_num, epoch_num, batch_num, batch_x, batch_y, batch_pred):
-        """
-        Called after every batch in training. We'll do gradient alignment check if
-        by_epoch=False and (batch_num % check_every == 0).
-        """
-        if not self.by_epoch:
-            if (batch_num + 1) % self.check_every == 0:  # +1 for 1-based
-                self._do_measurement(model, epoch_num, batch_num)
-
     def after_epoch(self, model, task_num, epoch_num):
         """
         Called after every epoch. We'll do gradient alignment check if
         by_epoch=True and (epoch_num % check_every == 0).
         """
-        if self.by_epoch:
-            if (epoch_num + 1) % self.check_every == 0:  # +1 for 1-based
-                # We only measure once per epoch across tasks.
-                # If you want this done per-task, you can move this call to after_task
-                self._do_measurement(model, epoch_num, None)
+        if (epoch_num + 1) % self.check_every == 0:  # +1 for 1-based
+            # We only measure once per epoch across tasks.
+            # If you want this done per-task, you can move this call to after_task
+            self._do_measurement(model, epoch_num)
 
-    def _do_measurement(self, model, epoch_num, batch_num):
+    def _do_measurement(self, model, epoch_num):
         # Save the current model state for safe reversion
         # so that these gradient computations don't affect the actual training.
         current_state = {k: v.clone() for k, v in model.state_dict().items()}
@@ -115,26 +89,36 @@ class GradientAlignmentMetric(Metric):
         model.train()
 
         # For each task, get random batch, compute gradient
-        grad_list = []
+        gradients_list = []
         for loader in self.task_train_loaders:
             x, y = self._get_random_batch(loader)
             g = self._compute_gradient(model, x, y)
-            grad_list.append(g.detach().clone())
+            gradients_list.append(g.detach().cpu().numpy())
 
             # restore model weights after each gradient so we don't accumulate
             model.load_state_dict(current_state)
 
-        # Compute average pairwise angle
-        avg_angle = self._compute_pairwise_angles(grad_list)
+        new_gradients = np.array(gradients_list)
+        new_gradients = np.expand_dims(new_gradients, axis=0)
 
-        # Store or log it
-        # Log to W&B for convenience
-        step_id = epoch_num if batch_num is None else batch_num
-        wandb.log({"gradient_alignment/avg_angle": avg_angle, "gradient_alignment/epoch": epoch_num})
-        self.results.append((epoch_num, batch_num, avg_angle))
+        if self.gradients is not None:
+            for i in range(len(self.task_train_loaders)):
+                intra_task_similarity = cosine_similarity(self.gradients[:, i, :], new_gradients[:, i, :]).mean()
+                self.results.append((f"task-{i}", epoch_num, intra_task_similarity))
+            self.gradients = np.concatenate((self.gradients, new_gradients), axis=0)
+        else:
+            self.gradients = new_gradients
 
         # Finally, restore model to original state
         model.load_state_dict(current_state)
+
+    def after_all_tasks(self, model, tasks):
+        for i in range(len(self.task_train_loaders)):
+            taskwise_training_logger = wandb.init(**self.wandb_params, name=f"task-{i}")
+            for task_id, epoch_num, sim in self.results:
+                if task_id == f"task-{i}":
+                    wandb.log({"gradient_alignment": sim}, step=epoch_num)
+            taskwise_training_logger.finish()
 
     def produce_result(self):
         """
@@ -142,7 +126,6 @@ class GradientAlignmentMetric(Metric):
         """
         return self.results
 
-    # The rest are no-ops, unless you want to do something else
     def before_task(self, model, task_num, train_loader, test_loader):
         pass
 

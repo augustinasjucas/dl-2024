@@ -1,9 +1,11 @@
 import torch
-from torch.utils.data import DataLoader
-import copy
 import wandb
+from torch.utils.data import DataLoader
 
-def simple_test(model: torch.nn.Module, test_loader: DataLoader, criterion, device: str):
+
+def simple_test(
+    model: torch.nn.Module, test_loader: DataLoader, criterion, device: str
+):
     # Reports the average loss and accuracy of the model on the test set
     model.eval()
     test_loss = 0
@@ -24,7 +26,15 @@ def simple_test(model: torch.nn.Module, test_loader: DataLoader, criterion, devi
     return test_loss, accuracy
 
 
-def simple_train(model, train_loader, optimizer, criterion, epochs, device, wandb_log_path: str = None):
+def simple_train(
+    model,
+    train_loader,
+    optimizer,
+    criterion,
+    epochs,
+    device,
+    wandb_log_path: str = None,
+):
     # Performs vanilla training on the model, and given data and all needed info
 
     model.train()
@@ -49,4 +59,9 @@ def simple_train(model, train_loader, optimizer, criterion, epochs, device, wand
         epoch_acc /= len(train_loader.dataset)
 
         if wandb_log_path is not None:
-            wandb.log({f"{wandb_log_path}loss": epoch_loss, f"{wandb_log_path}accuracy": epoch_acc})
+            wandb.log(
+                {
+                    f"{wandb_log_path}loss": epoch_loss,
+                    f"{wandb_log_path}accuracy": epoch_acc,
+                }
+            )

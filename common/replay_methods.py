@@ -1,7 +1,8 @@
-import torch
 import numpy as np
+import torch
 
-class SimpleReplay():
+
+class SimpleReplay:
     def __init__(self, samples_per_class=50, batch_size=4):
         self.size = samples_per_class
         self.memory = {}
@@ -15,7 +16,7 @@ class SimpleReplay():
     def add_by_loader(self, loader):
         for inputs, labels in loader:
             self.add_by_batch(inputs, labels)
-    
+
     def add(self, x, y):
         y = int(y.detach().cpu().numpy())
 
@@ -25,7 +26,7 @@ class SimpleReplay():
         self.indices[y] += 1
         if len(self.memory[y]) < self.size:
             self.memory[y].append(x)
-        else: 
+        else:
             # Perform reservoir sampling
             r = np.random.randint(0, self.indices[y])
 

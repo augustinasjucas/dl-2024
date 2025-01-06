@@ -1,7 +1,7 @@
-
 import random
 
 import torch
+
 
 def batch(data, labels, batch_size):
     """
@@ -13,7 +13,7 @@ def batch(data, labels, batch_size):
     data_batched = []
     labels_batched = []
     for i in range(0, len(data), batch_size):
-        x_batch, y_batch = data[i:i+batch_size], labels[i:i+batch_size]
+        x_batch, y_batch = data[i : i + batch_size], labels[i : i + batch_size]
         permuted_idx = torch.randperm(len(x_batch))
         x_batch, y_batch = x_batch[permuted_idx], y_batch[permuted_idx]
         data_batched.append(x_batch)
@@ -31,13 +31,22 @@ def reshuffle(batched_dataset, batch_size):
     return batch(data, labels, batch_size)
 
 
-def split_data(dataset_name, train, test, n_tasks=5, n_classes=10, custom_split=None, random_split=False, batch_size=32):
+def split_data(
+    dataset_name,
+    train,
+    test,
+    n_tasks=5,
+    n_classes=10,
+    custom_split=None,
+    random_split=False,
+    batch_size=32,
+):
     """
     Splits train and test set into tasks as follows
-        1. If `n_tasks` and `n_classes` is specified, it splits `n_classes` as evenly as possible among `n_tasks`, 
+        1. If `n_tasks` and `n_classes` is specified, it splits `n_classes` as evenly as possible among `n_tasks`,
             doing so randomly if random_split is True
         2. If `custom_split` is defined, this becomes the task split
-    
+
     Args:
       dataset_mame (str): name of the dataset (cifar10, cifar100)
       train: (dataset) training set, labels
@@ -59,18 +68,21 @@ def split_data(dataset_name, train, test, n_tasks=5, n_classes=10, custom_split=
         classes = list(range(n_classes))
         if random_split:
             random.shuffle(classes)
-        tasks = [classes[i:i+(n_classes // n_tasks)] for i in range(0, len(classes), n_classes // n_tasks)]
+        tasks = [
+            classes[i : i + (n_classes // n_tasks)]
+            for i in range(0, len(classes), n_classes // n_tasks)
+        ]
 
-    if dataset_name == 'cifar10':
-        mean = torch.tensor([0.4914, 0.4822, 0.4465]).view(1,3,1,1)
-        std = torch.tensor([0.2470, 0.2435, 0.2616]).view(1,3,1,1)
-    elif dataset_name == 'cifar100':
-        mean = torch.tensor([0.5071, 0.4867, 0.4408]).view(1,3,1,1)
-        std = torch.tensor([0.2675, 0.2565, 0.2761]).view(1,3,1,1)
-    
-    x_train = torch.tensor(train.data).float().permute(0,3,1,2) / 255.0
+    if dataset_name == "cifar10":
+        mean = torch.tensor([0.4914, 0.4822, 0.4465]).view(1, 3, 1, 1)
+        std = torch.tensor([0.2470, 0.2435, 0.2616]).view(1, 3, 1, 1)
+    elif dataset_name == "cifar100":
+        mean = torch.tensor([0.5071, 0.4867, 0.4408]).view(1, 3, 1, 1)
+        std = torch.tensor([0.2675, 0.2565, 0.2761]).view(1, 3, 1, 1)
+
+    x_train = torch.tensor(train.data).float().permute(0, 3, 1, 2) / 255.0
     y_train = torch.tensor(train.targets)
-    x_test = torch.tensor(test.data).float().permute(0,3,1,2) / 255.0
+    x_test = torch.tensor(test.data).float().permute(0, 3, 1, 2) / 255.0
     y_test = torch.tensor(test.targets)
 
     x_train = (x_train - mean) / std
@@ -88,9 +100,6 @@ def split_data(dataset_name, train, test, n_tasks=5, n_classes=10, custom_split=
         test_labels = y_test[test_subset_inds]
         test_set_batched = batch(test_data, test_labels, batch_size)
 
-        data_split.append({
-            'train': train_set_batched,
-            'test': test_set_batched
-        })
+        data_split.append({"train": train_set_batched, "test": test_set_batched})
 
     return data_split

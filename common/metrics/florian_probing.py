@@ -52,7 +52,7 @@ class FlorianProbing(Metric):
             """
             After training the model on all CL tasks in a row, this metrics does this:
                 1. Iterates one by one over the layers of the model.
-                    1. On the ith iteration, it sets the weights of all layers 0-i to the ones they had after training on all tasks
+                    1. On the ith iteration, it sets the weights of all layers 0-i to the ones they had after training after training on all tasks
                     and the remaining layers are just reinitialized.
                     2. The first i layers are then frozen.
                     3. Then, this model is trained on ALL data from ALL tasks (not in a CL way, just normally).
@@ -85,6 +85,7 @@ class FlorianProbing(Metric):
                 sweepy_string = f"layer-{name}/"
             else:
                 layerwise_training_logger = wandb.init(**self.wandb_params, name=f"layer-{name}")
+                wandb.Settings(quiet=True)
                 sweepy_string = ""
 
             all_layers_to_freeze.extend(new_layers_to_freeze)
@@ -94,11 +95,20 @@ class FlorianProbing(Metric):
 
             # first, freeze all needed layers
             for layer in all_layers_to_freeze:
-                layer.requires_grad = False
+                for param in layer.parameters():
+                    param.requires_grad = False
+
             # then reset the parameters of all layers that are not frozen
             for layer in self.all_layers:
                 if layer not in all_layers_to_freeze:
                     layer.reset_parameters()
+
+            print("Before training, model is ", model)
+            # print parameters and their requires_grad and first 5 numbers of (flattened) params
+            for name, param in model.named_parameters():
+                print("  ", name, param.requires_grad, param.flatten()[:5])
+
+            print()
 
             # now train the model on all data from all tasks
             optimizer = self.optimizer[0](model.parameters(), **self.optimizer[1])
@@ -148,4 +158,7 @@ class FlorianProbing(Metric):
         pass
 
     def before_task(self, model, task_num, train_loader, test_loader):
+        pass
+
+    def after_task(self, model, task_num, train_loader, test_loader):
         pass

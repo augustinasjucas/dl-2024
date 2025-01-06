@@ -14,7 +14,7 @@ def main():
     # Here, define the common wandb parameters that will be called on wandb.init() in the CLTraining and
     # possibly other metrics.
     wandb_params = {
-        "project": "gradients-test-61",
+        "project": "gradients-test-71",
         "entity": "continual-learning-2024",
     }
 
@@ -28,8 +28,8 @@ def main():
     # Get the tasks dataset. Look at how these are implemented and just add new classes if you need to.
     batch_size = 256
     task5 = FiveImageTasksCifar(full_train_dataset_cifar100, full_test_dataset_cifar100)
-    tasks_zipped = task5.get_tasks_zipped(batch_size=batch_size)[:4]
-    train_loaders = task5.get_train_loaders(batch_size=batch_size)[:4]
+    tasks_zipped = task5.get_tasks_zipped(batch_size=batch_size)[:3]
+    train_loaders = task5.get_train_loaders(batch_size=batch_size)[:3]
 
     # Get the model. IMPORTANT: move it to the needed device HERE.
     # Do NOT edit the training loops to move the model to the device there, because
@@ -61,7 +61,7 @@ def main():
     gradients_alignment_metric = GradientAlignment(
         task_train_loaders=train_loaders,
         criterion=torch.nn.CrossEntropyLoss(),
-        device="cuda",
+        device=device,
         check_every=1,  # e.g., every 1 epoch
         wandb_params=wandb_params,
     )
@@ -79,7 +79,7 @@ def main():
         model=model,
         # Define the parameters for training every task (same criterion and same # of epochs for all tasks)
         criterion=torch.nn.CrossEntropyLoss(),
-        epochs=6,
+        epochs=4,
         device=device,
         # Define the optimizer. It is done like this, so that I can reinitialize the optimizer for every task.
         # NOTE: this might not be optimal -> >>!

@@ -34,6 +34,9 @@ class GradientAlignment(Metric):
         self.initial_gradient_magnitudes_normalized = []
         self.initial_gradient_magnitudes = []
 
+        # Store the norms of the input gradients
+        self.input_grad_norms = []
+
     def _get_random_batch(self, loader):
         """
         Utility to grab a random batch from a DataLoader.
@@ -63,6 +66,35 @@ class GradientAlignment(Metric):
             if p.grad is not None:
                 grads.append(p.grad.view(-1))
         return torch.cat(grads, dim=0)
+
+    def _compute_input_gradient_norm(self, model, x, y):
+        """
+        Compute the L2-norm of dLoss/dX. Return the average norm over the batch.
+        """
+        # Ensure the input has grad tracking
+        x.requires_grad_(True)
+
+        # Zero model grads
+        model.zero_grad()
+
+        # Forward & compute loss
+        out = model(x)
+        loss = self.criterion(out, y)
+
+        # Backward to get dLoss/dX
+        loss.backward()
+
+        # Compute per-example norms, then average
+        #   x.grad shape = (batch_size, C, H, W)
+        #   Flatten dims except batch, then compute norm across each example
+        #   or do a spatial norm if you prefer (below uses total L2 norm).
+        grad_norms = x.grad.view(x.size(0), -1).norm(dim=1, p=2)
+        avg_grad_norm = grad_norms.mean().item()
+
+        # Detach from autograd, turn off requires_grad
+        x.requires_grad_(False)
+
+        return avg_grad_norm
 
     def after_epoch(self, model, task_num, epoch_num):
         """
@@ -107,6 +139,7 @@ class GradientAlignment(Metric):
 
         model.train()
         x, y = self._get_random_batch(train_loader)
+
         g = self._compute_gradient(model, x, y)
 
         # Compute norms
@@ -122,7 +155,14 @@ class GradientAlignment(Metric):
         self.initial_gradient_magnitudes_normalized.append(grad_norm_normalized.item())
         self.initial_gradient_magnitudes.append(grad_norm.item())
 
-        # Restore model weights
+        # Restore model
+        model.load_state_dict(current_state)
+
+        # Measure input gradient norm
+        input_grad_norm = self._compute_input_gradient_norm(model, x, y)
+        self.input_grad_norms.append(input_grad_norm)
+
+        # Restore model
         model.load_state_dict(current_state)
 
     def after_task(self, model, task_num, train_loader, test_loader):
@@ -149,10 +189,8 @@ class GradientAlignment(Metric):
                 else:
                     avg_similarities[i][j] = np.mean(similarities)
 
-        self.results = avg_similarities
-
         # Plot the heatmap
-        fig, ax = plt.subplots(figsize=(4, 3), dpi=300)
+        fig, ax = plt.subplots(figsize=(8, 6), dpi=300)
         cax = ax.matshow(avg_similarities, cmap="viridis", interpolation="none")
         fig.colorbar(cax)
         ax.set_title("Average cosine similarity of gradients between tasks")
@@ -165,7 +203,7 @@ class GradientAlignment(Metric):
 
         # Log the heatmap
         heatmap_logger = wandb.init(**self.wandb_params, name="gradient-alignment")
-        wandb.log({"metrics-gradients/heatmap": wandb.Image("data/gradient_similarities.png")})
+        wandb.log({"metrics-gradients/average_similarities_heatmap": wandb.Image("data/gradient_similarities.png")})
         heatmap_logger.finish()
 
         # Track how similarities evolved over time
@@ -180,25 +218,26 @@ class GradientAlignment(Metric):
             global_step_name = "metrics-gradients/measurement-step"
             wandb.define_metric(global_step_name)
 
+            wandb.log({"metrics-gradients/input_grad_norm": self.input_grad_norms[i]})
             wandb.log(
                 {
-                    f"metrics-gradients/initial_magnitude_normalized": self.initial_gradient_magnitudes_normalized[i],
+                    "metrics-gradients/initial_magnitude_normalized": self.initial_gradient_magnitudes_normalized[i],
                 },
             )
             wandb.log(
                 {
-                    f"metrics-gradients/initial_magnitude": self.initial_gradient_magnitudes[i],
+                    "metrics-gradients/initial_magnitude": self.initial_gradient_magnitudes[i],
                 },
             )
 
             for j in range(num_tasks):
-                metric_name = f"metrics-gradients/task-{j}"
+                metric_name = f"metrics-gradients/similarity_with_task-{j}"
                 wandb.define_metric(metric_name, step_metric=global_step_name)
 
             for k in range(self.gradients.shape[0]):  # Outer loop for the global step
                 for j in range(num_tasks):
                     if i != j:
-                        metric_name = f"metrics-gradients/task-{j}"
+                        metric_name = f"metrics-gradients/similarity_with_task-{j}"
                         log_data = {
                             metric_name: similarities_evolution[k][i, j],
                             global_step_name: k,
@@ -206,6 +245,8 @@ class GradientAlignment(Metric):
                         wandb.log(log_data)
 
             taskwise_training_logger.finish()
+
+        self.results = avg_similarities
 
     def produce_result(self):
         """

@@ -33,6 +33,8 @@ class BeautifulLogging(LossAccuracyCalculator):
     def before_task(self, model, task_index, train_loader, test_loader):
         self.current_task_logger = wandb.init(**self.wandb_params, name=f"sequential-training-task-{task_index}")
         self.train_loader = train_loader
+        self.test_loader = test_loader
+        wandb.Settings(quiet=True)
 
     def after_task(self, model, task_index, train_loader, test_loader):
         # Test on this task
@@ -56,13 +58,18 @@ class BeautifulLogging(LossAccuracyCalculator):
         self.current_task_logger.finish()
 
     def after_epoch(self, model, task_num, epoch_num):
+        # calculate test loss and accuracy
+        test_loss, test_accuracy = simple_test(model, self.test_loader, self.criterion, self.device)
+
         # Log the epoch results to wandb
         wandb.log(
             {
-                f"primary-sequential-training/loss": self.epoch_loss / len(self.train_loader.dataset),
-                f"primary-sequential-training/accuracy": self.epoch_accuracy / len(self.train_loader.dataset),
-            },
-            step=epoch_num,
+                f"primary-sequential-training/running-train-loss": self.epoch_loss / len(self.train_loader.dataset),
+                f"primary-sequential-training/running-train-accuracy": self.epoch_accuracy
+                / len(self.train_loader.dataset),
+                f"primary-sequential-training/running-test-loss": test_loss,
+                f"primary-sequential-training/running-test-accuracy": test_accuracy,
+            }
         )
 
 
@@ -76,10 +83,12 @@ class SweepyLogging(LossAccuracyCalculator):
     def before_all_tasks(self, model, tasks, cl_training_object):
         super().before_all_tasks(model, tasks, cl_training_object)
         wandb.init(**self.wandb_params)
+        wandb.Settings(quiet=True)
 
     def before_task(self, model, task_index, train_loader, test_loader):
         self.task_index = task_index
         self.train_loader = train_loader
+        self.test_loader = test_loader
 
     def after_task(self, model, task_index, train_loader, test_loader):
         # Test on this task
@@ -101,12 +110,17 @@ class SweepyLogging(LossAccuracyCalculator):
         )
 
     def after_epoch(self, model, task_num, epoch_num):
+        # calculate test loss and accuracy
+        test_loss, test_accuracy = simple_test(model, self.test_loader, self.criterion, self.device)
+
         # Log the epoch results to wandb
         wandb.log(
             {
-                f"primary-sequential-training/task{self.task_index}/loss": self.epoch_loss
+                f"primary-sequential-training/task{self.task_index}/running-train-loss": self.epoch_loss
                 / len(self.train_loader.dataset),
-                f"primary-sequential-training/task{self.task_index}/accuracy": self.epoch_accuracy
+                f"primary-sequential-training/task{self.task_index}/running-train-accuracy": self.epoch_accuracy
                 / len(self.train_loader.dataset),
+                f"primary-sequential-training/task{self.task_index}/running-test-loss": test_loss,
+                f"primary-sequential-training/task{self.task_index}/running-test-accuracy": test_accuracy,
             }
         )

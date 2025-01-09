@@ -1,86 +1,82 @@
-import torch
-import wandb
+import argparse
 
+import torch
+
+import wandb
 from common.datasets import get_experiment_setup
 from common.metrics.florian_probing import FlorianProbing
 from common.metrics.logging import BeautifulLogging
-from common.models import CIFAR_CNN_1
+from common.models import SimpleCNN
 from common.train import CLTraining
 
 
-def main():
-    # Here, define the common wandb parameters that will be called on wandb.init() in the CLTraining and
-    # possibly other metrics.
+def train_experiment(experiment_number=1):
+    # Check if this is being run as part of a sweep
+    is_sweep = wandb.run is not None
+
+    # Base wandb parameters
     wandb_params = {
         "project": "size-variations",
         "entity": "continual-learning-2024",
     }
 
-    # Turn off wandb logging
-    wandb.Settings(quiet=True)
+    if is_sweep:
+        # We're in a sweep, get the experiment number from sweep config
+        run = wandb.run
+        experiment_number = run.config.experiment_number
+        # Add group to wandb params for organized logging
+        wandb_params["group"] = f"sweep-{run.id}"
+    else:
+        # Normal run, initialize wandb
+        wandb.init(**wandb_params)
 
-    print(
-        f"Experiment URL: https://wandb.ai/{wandb_params['entity']}/{wandb_params['project']}"
+    experiment_number = 1
+    # Get the device
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Get the raw dataset and tasks for the experiment
+    tasks = get_experiment_setup(
+        "cifar100", batch_size=256, experiment_number=experiment_number
     )
 
-    # Get the raw dataset and tasks for first experiment
-    tasks = get_experiment_setup("cifar100", batch_size=256, experiment_number=1)
+    # Get the model and move it to device
+    model = SimpleCNN().to(device)
 
-    # Get the model. IMPORTANT: move it to the needed device HERE.
-    # Do NOT edit the training loops to move the model to the device there, because
-    # that would mess up FlorianProbing metric (as it needs references to layers).
-    model = CIFAR_CNN_1().to("cuda")  # TODO
-
-    # Define the Florian probing metric
+    # Define the Florian probing metric with beautiful logging
     florian_probing_metric = FlorianProbing(
-        # The order of layers to freeze. On the ith iteration, the first i layers are frozen.
-        layers_order=[  # TODO
+        layers_order=[
             ([model.conv1], "conv1"),
             ([model.conv2], "conv2"),
             ([model.conv3], "conv3"),
             ([model.fc1], "fc1"),
         ],
-        # The list of all layers with parameters. Needed for reinitializtion of layers. Hurts to specify this, but I don't know a better way.
         all_layers=[
             model.conv1,
             model.conv2,
             model.conv3,
             model.fc1,
             model.fc2,
-        ],  # TODO
-        # Define the parameters that will be needed when training on the FULL dataset (which comprises of all tasks in on dataset)
+        ],
         optimizer=(torch.optim.Adam, {"lr": 0.001}),
         criterion=torch.nn.CrossEntropyLoss(),
         epochs=100,
         batch_size=256,
-        device="cuda",
+        device=device,
         wandb_params=wandb_params,
-        # Will give nice visuals in W&B. Use True if you want to run sweeps, then it run all probing as a single run.
-        sweepy_logging=False,
+        sweepy_logging=False,  # Always use beautiful logging
     )
 
-    # Define the metric that will take care of monitoring accuracy as loss during sequential training
-    # the optins here are: BeautifulLogging OR SweepyLogging. SweepyLogging will log the sequential training
-    # as a single run (i.e., properly! just as it should be in W&B). Use Sweepy, when you need to do sweeps.
-    # However, if you want nice graphs and visuals, use Beautiful logging. Similarly, in FlorianProbing, you can
-    # set sweepy_logging=False, if you want nice visuals, but if you want to run sweeps, use sweep_logging=True
+    # Use BeautifulLogging for task-wise logging
     beautiful_logging = BeautifulLogging(wandb_params)
 
     # Define the CL training task
     cl_training = CLTraining(
-        # Give the model. IMPORTANT: has to be the same object as in FlorianProbing metric (not a copy!)
         model=model,
-        # Define the parameters for training every task (same criterion and same # of epochs for all tasks)
         criterion=torch.nn.CrossEntropyLoss(),
         epochs=100,
-        device="cuda",
-        # Define the optimizer. It is done like this, so that I can reinitialize the optimizer for every task.
-        # NOTE: this might not be optimal -> >>!
+        device=device,
         optimizer=(torch.optim.Adam, {"lr": 0.001, "weight_decay": 0.001}),
-        # Define the tasks to be trained on. This is a List[Pair[DataLoader, DataLoader]], with train and test loaders
-        # for every task. Using get_experiment_setup to get the configured tasks.
         tasks=tasks,
-        # Define the metrics to be used.
         metrics=[florian_probing_metric, beautiful_logging],
         wandb_params=wandb_params,
     )
@@ -88,20 +84,18 @@ def main():
     # Run the training
     results = cl_training.run()
 
-    print("Metric results:", results[1])
+    # Log the overall results if in sweep mode
+    if is_sweep:
+        wandb.log({"experiment_number": experiment_number, "final_results": results[1]})
+
+    return results
 
 
 if __name__ == "__main__":
-    # For sweeps: (make sure to use SweepyLogging in the CLTraining object and to set sweepy_logging=True in FlorianProbing)
-    # Define the search space
-    # sweep_configuration = {
-    #     "method": "random",
-    #     "metric": {"goal": "minimize", "name": "score"},
-    #     "parameters": {
-    #         "x": {"max": 0.1, "min": 0.01},
-    #         "y": {"values": [1, 3, 7]},
-    #     },
-    # }
-    # sweep_id = wandb.sweep(sweep=sweep_configuration, project="stupid-sweep")
-    # wandb.agent(sweep_id, function=main, count=10)
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--experiment", type=int, default=1, help="Experiment number for normal runs"
+    )
+    args = parser.parse_args()
+
+    train_experiment(experiment_number=args.experiment)

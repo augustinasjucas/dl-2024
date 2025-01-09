@@ -2,9 +2,9 @@ import copy
 from typing import List, Tuple
 
 import torch
-import wandb
 from torch.utils.data import DataLoader
 
+import wandb
 from common.metrics import Metric
 from common.utils import simple_test, simple_train
 
@@ -67,13 +67,18 @@ class FlorianProbing(Metric):
 
     def after_all_tasks(self, model, tasks: List[Tuple[DataLoader, DataLoader]]):
         # Construct a full train and test loader with all data from all tasks
+        # Construct a full train and test loader with all data from all tasks except the last one
         full_train_loader = DataLoader(
-            torch.utils.data.ConcatDataset([task[0].dataset for task in tasks]),
+            torch.utils.data.ConcatDataset(
+                [task[0].dataset for task in tasks[:-1]]
+            ),  # Added [:-1] slice
             batch_size=self.batch_size,
             shuffle=True,
         )
         full_test_loader = DataLoader(
-            torch.utils.data.ConcatDataset([task[1].dataset for task in tasks]),
+            torch.utils.data.ConcatDataset(
+                [task[1].dataset for task in tasks[:-1]]
+            ),  # Added [:-1] slice
             batch_size=self.batch_size,
             shuffle=True,
         )

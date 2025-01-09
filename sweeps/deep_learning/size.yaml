@@ -1,0 +1,11 @@
+program: reproduce.py
+command:
+  - python
+  - ${program}
+method: grid
+metric:
+  name: results
+  goal: minimize
+parameters:
+  experiment_number:
+    values: [1, 2, 3, 4, 5]

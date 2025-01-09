@@ -65,8 +65,8 @@ class CNN(nn.Module):
 
 
 class SimpleCNN(nn.Module):
-    def _init_(self, num_classes=100):
-        super(SimpleCNN, self)._init_()
+    def __init__(self, num_classes=100):  # Fixed: *init* -> __init__
+        super(SimpleCNN, self).__init__()  # Fixed: _init_() -> __init__()
         self.conv1 = nn.Conv2d(3, 32, 3, 1)
         self.conv2 = nn.Conv2d(32, 64, 3, 1)
         self.pool = nn.MaxPool2d(2, 2)
@@ -75,7 +75,7 @@ class SimpleCNN(nn.Module):
         self.fc1 = nn.Linear(128 * 6 * 6, 256)
         self.fc2 = nn.Linear(256, 128)
         self.fc3 = nn.Linear(128, 64)
-        self.fc4 = nn.Linear(64, num_classes)  # final output layer
+        self.fc4 = nn.Linear(64, num_classes)
 
     def forward(self, x, return_intermediate=False):
         x = F.relu(self.conv1(x))
@@ -88,10 +88,31 @@ class SimpleCNN(nn.Module):
         x = F.relu(self.fc2(x))
         embedding = F.relu(self.fc3(x))
         out = self.fc4(embedding)
-
         if return_intermediate:
             return out, embedding
         return out
+
+
+class SimpleCNN_GlobalPooling_FC(nn.Module):
+    def __init__(self, num_classes=100):
+        super(SimpleCNN_GlobalPooling_FC, self).__init__()
+        self.conv1 = nn.Conv2d(3, 32, 3, 1)
+        self.conv2 = nn.Conv2d(32, 64, 3, 1)
+        self.pool = nn.MaxPool2d(2, 2)  # Keep the first pooling layer
+        self.conv3 = nn.Conv2d(64, 128, 3, 1)
+        self.global_pool = nn.AdaptiveAvgPool2d(1)  # Replace pool2 with global pooling
+        self.fc1 = nn.Linear(128, 64)  # First smaller FC layer
+        self.fc2 = nn.Linear(64, num_classes)  # Final classifier
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))  # Pool after conv1
+        x = F.relu(self.conv2(x))  # Remove second pooling
+        x = F.relu(self.conv3(x))  # Keep the third convolution
+        x = self.global_pool(x)  # Global pooling
+        x = x.view(x.size(0), -1)  # Flatten
+        x = F.relu(self.fc1(x))  # Fully connected layers
+        x = self.fc2(x)
+        return x
 
 
 ####################################

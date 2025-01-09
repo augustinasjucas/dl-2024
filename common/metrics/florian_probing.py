@@ -2,11 +2,100 @@ import copy
 from typing import List, Tuple
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
 import wandb
 from common.metrics import Metric
 from common.utils import simple_test, simple_train
+
+
+class CIFARDedupConcatDataset(Dataset):
+    """
+    A dataset that concatenates multiple CIFAR datasets while removing duplicates.
+    Specifically handles CIFAR's structure and normalization.
+    """
+
+    def __init__(self, datasets: List[Dataset], dataset_type: str = "cifar10"):
+        self.datasets = datasets
+        self.dataset_type = dataset_type
+        self.indices = []
+        self._deduplicate()
+
+        # Store normalization parameters
+        if dataset_type == "cifar10":
+            self.mean = torch.tensor([0.4914, 0.4822, 0.4465])
+            self.std = torch.tensor([0.2470, 0.2435, 0.2616])
+        else:  # cifar100
+            self.mean = torch.tensor([0.5071, 0.4867, 0.4408])
+            self.std = torch.tensor([0.2675, 0.2565, 0.2761])
+
+    def _image_to_hash(self, image):
+        """Convert image tensor to a hashable format"""
+        # Denormalize the image first to ensure consistent comparison
+        image = image.cpu().numpy()
+        return hash(image.tobytes())
+
+    def _deduplicate(self):
+        """Build index of unique samples across all datasets"""
+        seen_samples = set()
+
+        for dataset_idx, dataset in enumerate(self.datasets):
+            if isinstance(dataset, torch.utils.data.Subset):
+                parent_dataset = dataset.dataset
+                indices = dataset.indices
+            else:
+                parent_dataset = dataset
+                indices = range(len(dataset))
+
+            for idx in indices:
+                image, label = parent_dataset[idx]
+                image_hash = self._image_to_hash(image)
+
+                if image_hash not in seen_samples:
+                    seen_samples.add(image_hash)
+                    self.indices.append((dataset_idx, idx))
+
+    def __getitem__(self, idx):
+        dataset_idx, sample_idx = self.indices[idx]
+        dataset = self.datasets[dataset_idx]
+
+        if isinstance(dataset, torch.utils.data.Subset):
+            return dataset.dataset[dataset.indices[sample_idx]]
+        return dataset[sample_idx]
+
+    def __len__(self):
+        return len(self.indices)
+
+
+def merge_cifar_dataloaders_dedup(
+    dataloaders: List[DataLoader],
+    batch_size: int,
+    dataset_type: str = "cifar10",
+    shuffle: bool = True,
+) -> DataLoader:
+    """
+    Merge multiple CIFAR dataloaders while removing duplicates.
+
+    Args:
+        dataloaders: List of DataLoader objects to merge
+        batch_size: Batch size for the merged dataloader
+        dataset_type: Either "cifar10" or "cifar100"
+        shuffle: Whether to shuffle the merged dataset
+
+    Returns:
+        A new DataLoader containing unique samples from all input dataloaders
+    """
+    datasets = [loader.dataset for loader in dataloaders]
+    merged_dataset = CIFARDedupConcatDataset(datasets, dataset_type)
+
+    return DataLoader(
+        merged_dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=dataloaders[0].num_workers
+        if hasattr(dataloaders[0], "num_workers")
+        else 0,
+    )
 
 
 class FlorianProbing(Metric):
@@ -66,20 +155,23 @@ class FlorianProbing(Metric):
         self.results = []
 
     def after_all_tasks(self, model, tasks: List[Tuple[DataLoader, DataLoader]]):
-        # Construct a full train and test loader with all data from all tasks
-        # Construct a full train and test loader with all data from all tasks except the last one
-        full_train_loader = DataLoader(
-            torch.utils.data.ConcatDataset(
-                [task[0].dataset for task in tasks[:-1]]
-            ),  # Added [:-1] slice
+        # Determine if we're using CIFAR-10 or CIFAR-100 based on the number of classes
+        dataset_type = (
+            "cifar100" if len(tasks[0][0].dataset.dataset.classes) == 100 else "cifar10"
+        )
+
+        # Create deduped train and test loaders excluding the last task
+        full_train_loader = merge_cifar_dataloaders_dedup(
+            [task[0] for task in tasks[:-1]],
             batch_size=self.batch_size,
+            dataset_type=dataset_type,
             shuffle=True,
         )
-        full_test_loader = DataLoader(
-            torch.utils.data.ConcatDataset(
-                [task[1].dataset for task in tasks[:-1]]
-            ),  # Added [:-1] slice
+
+        full_test_loader = merge_cifar_dataloaders_dedup(
+            [task[1] for task in tasks[:-1]],
             batch_size=self.batch_size,
+            dataset_type=dataset_type,
             shuffle=True,
         )
 
@@ -127,7 +219,9 @@ class FlorianProbing(Metric):
                 self.epochs,
                 self.device,
                 f"metrics-florian_probing/intermediate-training-results/{sweepy_string}",
+                test_loader=full_test_loader,
             )
+
             loss, acc = simple_test(
                 model, full_test_loader, self.criterion, self.device
             )

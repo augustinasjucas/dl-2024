@@ -91,7 +91,10 @@ class Tasks:
     def get_tasks_zipped(self, batch_size):
         # zips the train and test loaders
         return list(
-            zip(self.get_train_loaders(batch_size), self.get_test_loaders(batch_size))
+            zip(
+                self.get_train_loaders(batch_size, shuffle=True),
+                self.get_test_loaders(batch_size),
+            )
         )
 
     def get_task_name(self, i):
@@ -203,9 +206,10 @@ class FiftyImageTasksCifar(Tasks):
 class Cifar10SampleExperiment(Tasks):
     """
     Creates two tasks from CIFAR-10:
-    - Task 1: First 5 classes with n samples each
-    - Task 2: Last 5 classes with n samples each
+    - Task 1: First 5 classes with n samples each from training set
+    - Task 2: Last 5 classes with n samples each from training set
     where n = experiment_number * 500
+    The test set remains complete.
     """
 
     def __init__(self, train_dataset, test_dataset, experiment_number):
@@ -226,24 +230,35 @@ class Cifar10SampleExperiment(Tasks):
         # Create two tasks: classes 0-4 and 5-9
         task_splits = [(0, 5), (5, 10)]
 
+        # If this is the test dataset, don't subsample
+        is_test = (
+            len(class_indices[0]) == 1000
+        )  # CIFAR-10 has 1000 test samples per class
+
         for start, end in task_splits:
             task_indices = []
             for class_idx in range(start, end):
-                # Randomly sample the specified number of images per class
                 available_indices = class_indices[class_idx]
-                if len(available_indices) < self.samples_per_class:
-                    raise ValueError(
-                        f"Not enough samples for class {class_idx}. Requested {self.samples_per_class}, but only {len(available_indices)} available."
+                if is_test:
+                    # Use all samples for test set
+                    task_indices.extend(available_indices)
+                else:
+                    # Only subsample training set
+                    if len(available_indices) < self.samples_per_class:
+                        raise ValueError(
+                            f"Not enough training samples for class {class_idx}. "
+                            f"Requested {self.samples_per_class}, but only {len(available_indices)} available."
+                        )
+                    sampled_indices = random.sample(
+                        available_indices, self.samples_per_class
                     )
-                sampled_indices = random.sample(
-                    available_indices, self.samples_per_class
-                )
-                task_indices.extend(sampled_indices)
+                    task_indices.extend(sampled_indices)
 
             datasets.append(Subset(dataset, task_indices))
             class_names = [dataset.classes[j] for j in range(start, end)]
+            samples_text = "all" if is_test else f"{self.samples_per_class} training"
             self.names.append(
-                f"Classes {', '.join(class_names)} ({self.samples_per_class} samples each)"
+                f"Classes {', '.join(class_names)} ({samples_text} samples each)"
             )
 
         return datasets
@@ -267,6 +282,19 @@ class Cifar100ClassExperiment(Tasks):
         datasets = []
         self.names = []
 
+        # task_splits = [
+        #     (0, 10 * self.classes_per_task),
+        #     (10 * self.classes_per_task, 11 * self.classes_per_task),
+        #     (11 * self.classes_per_task, 12 * self.classes_per_task),
+        #     (12 * self.classes_per_task, 13 * self.classes_per_task),
+        #     (13 * self.classes_per_task, 14 * self.classes_per_task),
+        #     (14 * self.classes_per_task, 15 * self.classes_per_task),
+        #     (15 * self.classes_per_task, 16 * self.classes_per_task),
+        #     (16 * self.classes_per_task, 17 * self.classes_per_task),
+        #     (17 * self.classes_per_task, 18 * self.classes_per_task),
+        #     (18 * self.classes_per_task, 19 * self.classes_per_task),
+        # ]
+
         # Create two tasks with specified number of classes each
         task_splits = [
             (0, self.classes_per_task),
@@ -274,20 +302,20 @@ class Cifar100ClassExperiment(Tasks):
             (2 * self.classes_per_task, 3 * self.classes_per_task),
             (3 * self.classes_per_task, 4 * self.classes_per_task),
             (4 * self.classes_per_task, 5 * self.classes_per_task),
-            # (5 * self.classes_per_task, 6 * self.classes_per_task),
-            # (6 * self.classes_per_task, 7 * self.classes_per_task),
-            # (7 * self.classes_per_task, 8 * self.classes_per_task),
-            # (8 * self.classes_per_task, 9 * self.classes_per_task),
-            # (9 * self.classes_per_task, 10 * self.classes_per_task),
-            # (10 * self.classes_per_task, 11 * self.classes_per_task),
-            # (11 * self.classes_per_task, 12 * self.classes_per_task),
-            # (12 * self.classes_per_task, 13 * self.classes_per_task),
-            # (13 * self.classes_per_task, 14 * self.classes_per_task),
-            # (14 * self.classes_per_task, 15 * self.classes_per_task),
-            # (15 * self.classes_per_task, 16 * self.classes_per_task),
-            # (16 * self.classes_per_task, 17 * self.classes_per_task),
-            # (17 * self.classes_per_task, 18 * self.classes_per_task),
-            # (18 * self.classes_per_task, 19 * self.classes_per_task),
+            (5 * self.classes_per_task, 6 * self.classes_per_task),
+            (6 * self.classes_per_task, 7 * self.classes_per_task),
+            (7 * self.classes_per_task, 8 * self.classes_per_task),
+            (8 * self.classes_per_task, 9 * self.classes_per_task),
+            (9 * self.classes_per_task, 10 * self.classes_per_task),
+            (10 * self.classes_per_task, 11 * self.classes_per_task),
+            (11 * self.classes_per_task, 12 * self.classes_per_task),
+            (12 * self.classes_per_task, 13 * self.classes_per_task),
+            (13 * self.classes_per_task, 14 * self.classes_per_task),
+            (14 * self.classes_per_task, 15 * self.classes_per_task),
+            (15 * self.classes_per_task, 16 * self.classes_per_task),
+            (16 * self.classes_per_task, 17 * self.classes_per_task),
+            (17 * self.classes_per_task, 18 * self.classes_per_task),
+            (18 * self.classes_per_task, 19 * self.classes_per_task),
         ]
 
         for start, end in task_splits:
@@ -301,6 +329,96 @@ class Cifar100ClassExperiment(Tasks):
             datasets.append(Subset(dataset, indices))
             class_names = [dataset.classes[j] for j in range(start, end)]
             self.names.append(f"Classes {', '.join(class_names)}")
+
+        return datasets
+
+
+class Cifar100ClassExperimentWithDeterministicMemory(Tasks):
+    def __init__(self, train_dataset, test_dataset, experiment_number, seed=42):
+        if not 1 <= experiment_number <= 10:
+            raise ValueError("Experiment number must be between 1 and 10")
+        self.classes_per_task = experiment_number * 5
+        self.samples_per_memory_class = 50
+        self.seed = seed
+        # Pre-compute memory indices for training dataset only
+        self.memory_indices_by_class = self._precompute_memory_indices(train_dataset)
+        super().__init__(train_dataset, test_dataset)
+
+    def _precompute_memory_indices(self, dataset):
+        torch.manual_seed(self.seed)
+        memory_indices = {}
+
+        for class_idx in range(100):
+            class_indices = torch.where(torch.tensor(dataset.targets) == class_idx)[0]
+            if len(class_indices) > self.samples_per_memory_class:
+                perm = torch.randperm(len(class_indices))
+                memory_indices[class_idx] = class_indices[
+                    perm[: self.samples_per_memory_class]
+                ]
+            else:
+                memory_indices[class_idx] = class_indices
+
+        return memory_indices
+
+    def split_dataset(self, dataset):
+        datasets = []
+        self.names = []
+        is_test = len(dataset) == 10000  # CIFAR-100 has 10000 test samples
+
+        task_splits = [
+            (0, self.classes_per_task),
+            (self.classes_per_task, 2 * self.classes_per_task),
+            (2 * self.classes_per_task, 3 * self.classes_per_task),
+            (3 * self.classes_per_task, 4 * self.classes_per_task),
+            (4 * self.classes_per_task, 5 * self.classes_per_task),
+            (5 * self.classes_per_task, 6 * self.classes_per_task),
+            (6 * self.classes_per_task, 7 * self.classes_per_task),
+            (7 * self.classes_per_task, 8 * self.classes_per_task),
+            (8 * self.classes_per_task, 9 * self.classes_per_task),
+            (9 * self.classes_per_task, 10 * self.classes_per_task),
+            (10 * self.classes_per_task, 11 * self.classes_per_task),
+            (11 * self.classes_per_task, 12 * self.classes_per_task),
+            (12 * self.classes_per_task, 13 * self.classes_per_task),
+            (13 * self.classes_per_task, 14 * self.classes_per_task),
+            (14 * self.classes_per_task, 15 * self.classes_per_task),
+            (15 * self.classes_per_task, 16 * self.classes_per_task),
+            (16 * self.classes_per_task, 17 * self.classes_per_task),
+            (17 * self.classes_per_task, 18 * self.classes_per_task),
+            (18 * self.classes_per_task, 19 * self.classes_per_task),
+        ]
+
+        previously_seen_classes = set()
+
+        for task_idx, (start, end) in enumerate(task_splits):
+            task_indices = []
+
+            # Add all samples for current task's new classes
+            for class_idx in range(start, end):
+                class_indices = torch.where(torch.tensor(dataset.targets) == class_idx)[
+                    0
+                ]
+                task_indices.extend(class_indices.tolist())
+
+            # Add memory samples only for training dataset, not for test dataset
+            if not is_test and previously_seen_classes:
+                for prev_class in previously_seen_classes:
+                    memory_indices = self.memory_indices_by_class[prev_class]
+                    task_indices.extend(memory_indices.tolist())
+
+            # Update previously seen classes
+            previously_seen_classes.update(range(start, end))
+
+            # Create the subset for this task
+            datasets.append(torch.utils.data.Subset(dataset, sorted(task_indices)))
+
+            # Create descriptive name for this task
+            current_classes = [dataset.classes[j] for j in range(start, end)]
+            memory_desc = (
+                f" (+ {self.samples_per_memory_class} fixed samples/class from {len(previously_seen_classes - set(range(start, end)))} previous classes)"
+                if task_idx > 0 and not is_test
+                else ""
+            )
+            self.names.append(f"Classes {', '.join(current_classes)}{memory_desc}")
 
         return datasets
 
@@ -339,8 +457,14 @@ def get_experiment_setup(dataset_type="cifar10", batch_size=256, experiment_numb
         )
     else:  # cifar100
         # Scale classes: experiment_number * 5 classes per task
-        task = Cifar100ClassExperiment(
-            full_train_dataset, full_test_dataset, experiment_number
+        # task = Cifar100ClassExperiment(
+        #     full_train_dataset, full_test_dataset, experiment_number
+        # )
+        task = Cifar100ClassExperimentWithDeterministicMemory(
+            full_train_dataset,
+            full_test_dataset,
+            experiment_number,
+            seed=42,
         )
 
     return task.get_tasks_zipped(batch_size)

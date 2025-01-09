@@ -6,7 +6,7 @@ import wandb
 from common.datasets import get_experiment_setup
 from common.metrics.florian_probing import FlorianProbing
 from common.metrics.logging import BeautifulLogging
-from common.models import SimpleCNN
+from common.models import SimpleCNN_GlobalPooling_FC
 from common.train import CLTraining
 
 
@@ -40,7 +40,7 @@ def train_experiment(experiment_number=1):
     )
 
     # Get the model and move it to device
-    model = SimpleCNN().to(device)
+    model = SimpleCNN_GlobalPooling_FC().to(device)
 
     # Define the Florian probing metric with beautiful logging
     florian_probing_metric = FlorianProbing(
@@ -73,7 +73,7 @@ def train_experiment(experiment_number=1):
     cl_training = CLTraining(
         model=model,
         criterion=torch.nn.CrossEntropyLoss(),
-        epochs=100,
+        epochs=150,
         device=device,
         optimizer=(torch.optim.Adam, {"lr": 0.001, "weight_decay": 0.001}),
         tasks=tasks,

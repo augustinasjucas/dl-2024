@@ -15,7 +15,7 @@ class GradientAlignment(Metric):
         task_train_loaders,  # List of DataLoader, one for each task
         criterion,  # e.g. torch.nn.CrossEntropyLoss()
         device="cuda",
-        check_every=1,  # how often to check (every 'n' epochs)
+        check_every=100,  # how often to check (e.g. every 100 batches)
         wandb_params: dict = None,
     ):
         """
@@ -23,9 +23,7 @@ class GradientAlignment(Metric):
         Additionally, it can measure the gradient magnitude at the start of each task
         to get a sense of transfer (possibly normalized by parameter norm).
 
-        `layers_order` is a list of tuples (list_of_layers, name),
-        e.g. [([model.conv1], "conv1"), ([model.conv2], "conv2"), ...]
-        This allows separate logging of per-layer gradient similarities.
+        Instead of checking every n epochs, we check every n batches.
         """
         super().__init__("Gradient Alignment", "")
         self.task_train_loaders = task_train_loaders
@@ -48,6 +46,9 @@ class GradientAlignment(Metric):
         # Store the norms of the input gradients
         self.input_grad_norms = []
 
+        # A global counter for batches (across tasks)
+        self.global_batch_count = 0
+
     def _get_random_batch(self, loader):
         """
         Utility to grab a random batch from a DataLoader.
@@ -58,7 +59,7 @@ class GradientAlignment(Metric):
 
     def _compute_gradient(self, model, x, y):
         """
-        Compute the gradient for the *entire model*, flatten all parameter grads
+        Compute the gradient for the entire model, flatten all parameter grads
         into a single 1D tensor. Return that flattened gradient.
         """
         # Zero out existing gradients
@@ -113,7 +114,7 @@ class GradientAlignment(Metric):
             if len(layer_params_grads) > 0:
                 layerwise_grads_dict[layer_name] = torch.cat(layer_params_grads, dim=0)
             else:
-                # If for some reason layer has no grads, store a zero vector
+                # If for some reason the layer has no grads, store a zero vector
                 layerwise_grads_dict[layer_name] = torch.zeros(1, device=self.device)
 
         return global_grads, layerwise_grads_dict
@@ -144,75 +145,72 @@ class GradientAlignment(Metric):
 
         return avg_grad_norm
 
-    def after_epoch(self, model, task_num, epoch_num):
+    def after_batch(self, model, task_num, epoch_idx, batch_idx, x, y, y_pred):
         """
-        Called after every epoch. We'll do gradient alignment check if
-        (epoch_num + 1) % self.check_every == 0.
+        Call this method after every training batch. We measure and log
+        gradient alignment if the global_batch_count hits the check_every threshold.
         """
-        if (epoch_num + 1) % self.check_every == 0:
-            # Save the current model state for safe reversion
-            current_state = {k: v.clone() for k, v in model.state_dict().items()}
+        self.global_batch_count += 1
 
-            # Put model in train mode, just in case
-            model.train()
+        # If it's not time to check yet, skip
+        if self.global_batch_count % self.check_every != 0:
+            return
 
-            # For each task, get random batch, compute gradient
-            gradients_list = []
-            # We'll also collect layerwise gradients in a temporary dict of lists
-            layerwise_gradients_dict_of_lists = {layer_name: [] for (_, layer_name) in self.layers_order}
+        # Save the current model state for safe reversion
+        current_state = {k: v.clone() for k, v in model.state_dict().items()}
+        model.train()
 
-            for loader in self.task_train_loaders:
-                x, y = self._get_random_batch(loader)
-                # Single forward/backward pass + retrieve all gradients
-                g_global, g_layers = self._compute_gradients_for_all_layers(model, x, y)
+        # We'll compute the gradient for each task using a random batch
+        gradients_list = []
+        layerwise_gradients_dict_of_lists = {layer_name: [] for (_, layer_name) in self.layers_order}
 
-                # Store the global gradient
-                gradients_list.append(g_global.detach().cpu().numpy())
+        for loader in self.task_train_loaders:
+            batch_x, batch_y = self._get_random_batch(loader)
+            g_global, g_layers = self._compute_gradients_for_all_layers(model, batch_x, batch_y)
 
-                # Store each layer's gradient
-                for layer_name in g_layers:
-                    layerwise_gradients_dict_of_lists[layer_name].append(g_layers[layer_name].detach().cpu().numpy())
+            # Store the global gradient
+            gradients_list.append(g_global.detach().cpu().numpy())
 
-                # restore model weights after each gradient so we don't accumulate
-                model.load_state_dict(current_state)
+            # Store each layer's gradient
+            for layer_name in g_layers:
+                layerwise_gradients_dict_of_lists[layer_name].append(g_layers[layer_name].detach().cpu().numpy())
 
-            # Now we have for each task the entire gradient, plus each layer's gradient
-            # Convert them to np arrays
-            new_global_gradients = np.array(gradients_list)  # shape [tasks, total_params]
-            new_global_gradients = np.expand_dims(new_global_gradients, axis=0)  # [1, tasks, total_params]
-
-            # Merge with self.gradients
-            if self.gradients is not None:
-                self.gradients = np.concatenate((self.gradients, new_global_gradients), axis=0)
-            else:
-                self.gradients = new_global_gradients
-
-            # Handle each layer
-            for layers, layer_name in self.layers_order:
-                layerwise_array = np.array(layerwise_gradients_dict_of_lists[layer_name])  # [tasks, layer_params]
-                layerwise_array = np.expand_dims(layerwise_array, axis=0)  # [1, tasks, layer_params]
-
-                if self.layerwise_gradients[layer_name] is not None:
-                    self.layerwise_gradients[layer_name] = np.concatenate(
-                        (self.layerwise_gradients[layer_name], layerwise_array), axis=0
-                    )
-                else:
-                    self.layerwise_gradients[layer_name] = layerwise_array
-
-            # Finally, restore model to original state
+            # Restore model weights after each gradient so we don't accumulate
             model.load_state_dict(current_state)
+
+        new_global_gradients = np.array(gradients_list)  # [tasks, total_params]
+        new_global_gradients = np.expand_dims(new_global_gradients, axis=0)  # [1, tasks, total_params]
+
+        if self.gradients is not None:
+            self.gradients = np.concatenate((self.gradients, new_global_gradients), axis=0)
+        else:
+            self.gradients = new_global_gradients
+
+        # Handle each layer
+        for layers, layer_name in self.layers_order:
+            layerwise_array = np.array(layerwise_gradients_dict_of_lists[layer_name])  # [tasks, layer_params]
+            layerwise_array = np.expand_dims(layerwise_array, axis=0)  # [1, tasks, layer_params]
+
+            if self.layerwise_gradients[layer_name] is not None:
+                self.layerwise_gradients[layer_name] = np.concatenate(
+                    (self.layerwise_gradients[layer_name], layerwise_array), axis=0
+                )
+            else:
+                self.layerwise_gradients[layer_name] = layerwise_array
+
+        # Restore model
+        model.load_state_dict(current_state)
 
     def before_task(self, model, task_num, train_loader, test_loader):
         """
-        Called before each new task begins. We measure the gradient magnitude on
-        this new task (using a random batch), normalized by the parameter norm.
+        Measure the gradient magnitude on this new task (using a random batch),
+        normalized by parameter norm.
         """
-        # Save the current model state for safe reversion
+        # Save the current model state
         current_state = {k: v.clone() for k, v in model.state_dict().items()}
 
         model.train()
         x, y = self._get_random_batch(train_loader)
-
         g = self._compute_gradient(model, x, y)
 
         # Compute norms
@@ -223,7 +221,7 @@ class GradientAlignment(Metric):
             param_norm = param_norm.sqrt()
 
             grad_norm = g.norm()
-            grad_norm_normalized = grad_norm / (param_norm + 1e-8)  # Avoid div by zero
+            grad_norm_normalized = grad_norm / (param_norm + 1e-8)
 
         self.initial_gradient_magnitudes_normalized.append(grad_norm_normalized.item())
         self.initial_gradient_magnitudes.append(grad_norm.item())
@@ -272,15 +270,11 @@ class GradientAlignment(Metric):
         # Compute per-layer average similarities
         layerwise_similarities = np.zeros((len(self.layers_order), num_tasks, num_tasks))
         for idx, (layer_list, layer_name) in enumerate(self.layers_order):
-            # shape of self.layerwise_gradients[layer_name]: [time, tasks, layer_params]
-            # We'll compute average pairwise similarities for that layer
-            layer_array = self.layerwise_gradients[layer_name]
-
+            layer_array = self.layerwise_gradients[layer_name]  # [time, tasks, layer_params]
             for i in range(num_tasks):
                 for j in range(num_tasks):
                     similarities = cosine_similarity(layer_array[:, i, :], layer_array[:, j, :])
                     if i == j:
-                        # exclude self-similarity on the diagonal
                         mask = np.ones(similarities.shape, dtype=bool)
                         np.fill_diagonal(mask, 0)
                         layerwise_similarities[idx, i, j] = np.mean(similarities[mask])
@@ -312,7 +306,7 @@ class GradientAlignment(Metric):
         global_logger.log_artifact(artifact_global)
         global_logger.finish()
 
-        # We will create subplots: 1 row, len(self.layers_order) columns
+        # Plot the per-layer heatmaps
         fig_layers, axes = plt.subplots(1, len(self.layers_order), figsize=(5 * len(self.layers_order), 5), dpi=300)
         if len(self.layers_order) == 1:
             axes = [axes]  # Make it iterable
@@ -339,7 +333,7 @@ class GradientAlignment(Metric):
         layerwise_logger.log_artifact(artifact_layerwise)
         layerwise_logger.finish()
 
-        # Track how similarities evolved over time (global) if needed
+        # Track how similarities evolved over time (global)
         running_similarities = []
         for i in range(self.gradients.shape[0]):
             similarities = cosine_similarity(self.gradients[i, :, :])

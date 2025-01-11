@@ -76,7 +76,7 @@ def run_experiment(project_name="test", wandb_logging=True):
         task_train_loaders=train_loaders,
         criterion=torch.nn.CrossEntropyLoss(),
         device=device,
-        check_every=4,  # e.g., every 1 epoch
+        check_every=40,  # e.g., every 1 epoch
         wandb_params=wandb_params,
     )
 

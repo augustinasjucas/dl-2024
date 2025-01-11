@@ -67,7 +67,7 @@ class Tasks:
 
     def get_tasks_zipped(self, batch_size):
         # zips the train and test loaders
-        return list(zip(self.get_train_loaders(batch_size), self.get_test_loaders(batch_size)))
+        return list(zip(self.get_train_loaders(batch_size, shuffle=True), self.get_test_loaders(batch_size)))
 
     def get_task_name(self, i):
         return self.names[i]

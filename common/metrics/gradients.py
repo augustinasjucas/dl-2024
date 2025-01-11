@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib.pyplot as plt
 from typing import List, Tuple
+import os
 
 
 class GradientAlignment(Metric):
@@ -247,13 +248,16 @@ class GradientAlignment(Metric):
         for each layer. Then we log them all to W&B, producing separate
         heatmaps. All color scales are set from -1 to 1 for easy comparison.
         """
+        output_dir = "results"
+        os.makedirs(output_dir, exist_ok=True)
+
         num_tasks = len(self.task_train_loaders)
 
         min_sim = 1
         max_sim = -1
 
         # Compute average pairwise similarities for the global gradients
-        avg_similarities = np.zeros((num_tasks, num_tasks))
+        global_similarities = np.zeros((num_tasks, num_tasks))
         for i in range(num_tasks):
             for j in range(num_tasks):
                 similarities = cosine_similarity(self.gradients[:, i, :], self.gradients[:, j, :])
@@ -261,12 +265,12 @@ class GradientAlignment(Metric):
                     # exclude self-similarity on the diagonal by masking
                     mask = np.ones(similarities.shape, dtype=bool)
                     np.fill_diagonal(mask, 0)
-                    avg_similarities[i][j] = np.mean(similarities[mask])
+                    global_similarities[i][j] = np.mean(similarities[mask])
                 else:
-                    avg_similarities[i][j] = np.mean(similarities)
+                    global_similarities[i][j] = np.mean(similarities)
 
         # Compute per-layer average similarities
-        layer_avg_sim = np.zeros((len(self.layers_order), num_tasks, num_tasks))
+        layerwise_similarities = np.zeros((len(self.layers_order), num_tasks, num_tasks))
         for idx, (layer_list, layer_name) in enumerate(self.layers_order):
             # shape of self.layerwise_gradients[layer_name]: [time, tasks, layer_params]
             # We'll compute average pairwise similarities for that layer
@@ -279,17 +283,17 @@ class GradientAlignment(Metric):
                         # exclude self-similarity on the diagonal
                         mask = np.ones(similarities.shape, dtype=bool)
                         np.fill_diagonal(mask, 0)
-                        layer_avg_sim[idx, i, j] = np.mean(similarities[mask])
+                        layerwise_similarities[idx, i, j] = np.mean(similarities[mask])
                     else:
-                        layer_avg_sim[idx, i, j] = np.mean(similarities)
+                        layerwise_similarities[idx, i, j] = np.mean(similarities)
 
-        min_sim = min(min_sim, np.min(avg_similarities), np.min(layer_avg_sim))
-        max_sim = max(max_sim, np.max(avg_similarities), np.max(layer_avg_sim))
+        min_sim = min(min_sim, np.min(global_similarities), np.min(layerwise_similarities))
+        max_sim = max(max_sim, np.max(global_similarities), np.max(layerwise_similarities))
 
         # Plot the global heatmap
         fig_global, ax_global = plt.subplots(figsize=(8, 6), dpi=300)
         cax_global = ax_global.matshow(
-            avg_similarities, cmap="viridis", interpolation="none", vmin=min_sim, vmax=max_sim
+            global_similarities, cmap="viridis", interpolation="none", vmin=min_sim, vmax=max_sim
         )
         fig_global.colorbar(cax_global)
         ax_global.set_title("Average cosine similarity (global) between tasks")
@@ -297,18 +301,16 @@ class GradientAlignment(Metric):
         ax_global.set_ylabel("Task index")
         ax_global.set_xticks(range(num_tasks))
         ax_global.set_yticks(range(num_tasks))
-        plt.savefig("data/gradient_similarities_global.png", dpi=300)
+        plt.savefig(f"{output_dir}/global_similarities.png", dpi=300)
 
         # Log the global heatmap
-        heatmap_logger = wandb.init(**self.wandb_params, name="gradient-alignment-global")
-        wandb.log(
-            {
-                "metrics-gradients/average_similarities_heatmap_global": wandb.Image(
-                    "data/gradient_similarities_global.png"
-                )
-            }
-        )
-        heatmap_logger.finish()
+        global_logger = wandb.init(**self.wandb_params, name="gradient-alignment-global")
+        wandb.log({"metrics-gradients/global_similarities": wandb.Image(f"{output_dir}/global_similarities.png")})
+        artifact_global = wandb.Artifact("global_similarities", type="metric")
+        np.save(f"{output_dir}/global_similarities.npy", global_similarities)
+        artifact_global.add_file(f"{output_dir}/global_similarities.npy")
+        global_logger.log_artifact(artifact_global)
+        global_logger.finish()
 
         # We will create subplots: 1 row, len(self.layers_order) columns
         fig_layers, axes = plt.subplots(1, len(self.layers_order), figsize=(5 * len(self.layers_order), 5), dpi=300)
@@ -317,24 +319,24 @@ class GradientAlignment(Metric):
 
         for idx, (layer_list, layer_name) in enumerate(self.layers_order):
             ax = axes[idx]
-            cax_layer = ax.matshow(layer_avg_sim[idx], cmap="viridis", interpolation="none", vmin=min_sim, vmax=max_sim)
+            cax_layer = ax.matshow(
+                layerwise_similarities[idx], cmap="viridis", interpolation="none", vmin=min_sim, vmax=max_sim
+            )
             ax.set_title(f"{layer_name}")
             ax.set_xlabel("Task index")
             ax.set_ylabel("Task index")
             ax.set_xticks(range(num_tasks))
             ax.set_yticks(range(num_tasks))
             fig_layers.colorbar(cax_layer, ax=ax)
-        plt.savefig("data/gradient_similarities_per_layer.png", dpi=300)
+        plt.savefig(f"{output_dir}/layerwise_similarities.png", dpi=300)
 
-        # Log the per-layer heatmap figure
+        # Log the per-layer heatmap
         layerwise_logger = wandb.init(**self.wandb_params, name="gradient-alignment-per-layer")
-        wandb.log(
-            {
-                "metrics-gradients/per_layer_similarities_heatmap": wandb.Image(
-                    "data/gradient_similarities_per_layer.png"
-                )
-            }
-        )
+        wandb.log({"metrics-gradients/layerwise_similarities": wandb.Image(f"{output_dir}/layerwise_similarities.png")})
+        artifact_layerwise = wandb.Artifact("layerwise_similarities", type="metric")
+        np.save(f"{output_dir}/layerwise_similarities.npy", layerwise_similarities)
+        artifact_layerwise.add_file(f"{output_dir}/layerwise_similarities.npy")
+        layerwise_logger.log_artifact(artifact_layerwise)
         layerwise_logger.finish()
 
         # Track how similarities evolved over time (global) if needed
@@ -378,7 +380,10 @@ class GradientAlignment(Metric):
 
             taskwise_training_logger.finish()
 
-        self.results = avg_similarities
+        self.results = {
+            "global_similarities": global_similarities,
+            "layerwise_similarities": layerwise_similarities,
+        }
 
     def produce_result(self):
         """

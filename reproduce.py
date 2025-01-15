@@ -81,7 +81,7 @@ def run_experiment(project_name="test", task_size=20, wandb_logging=True):
         task_train_loaders=train_loaders,
         criterion=torch.nn.CrossEntropyLoss(),
         device=device,
-        check_every=100,  # e.g., every 1 batch
+        check_every=50,  # e.g., every 1 batch
         wandb_params=wandb_params,
     )
 
@@ -98,7 +98,7 @@ def run_experiment(project_name="test", task_size=20, wandb_logging=True):
         model=model,
         # Define the parameters for training every task (same criterion and same # of epochs for all tasks)
         criterion=torch.nn.CrossEntropyLoss(),
-        epochs=80,
+        epochs=50,
         device=device,
         # Define the optimizer. It is done like this, so that I can reinitialize the optimizer for every task.
         # NOTE: this might not be optimal -> >>!

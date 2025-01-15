@@ -144,39 +144,46 @@ class GradientAlignment(Metric):
 
         return avg_grad_norm
 
-    def after_batch(self, model, task_num, epoch_idx, batch_idx, x, y, y_pred):
-        """
-        Call this method after every training batch. We measure and log
-        gradient alignment if the global_batch_count hits the check_every threshold.
-        """
+    def after_batch(self, model, curr_task_num, epoch_idx, batch_idx, x, y, y_pred):
         self.global_batch_count += 1
 
-        # If it's not time to check yet, skip
         if self.global_batch_count % self.check_every != 0:
             return
 
-        # Save the current model state for safe reversion
         current_state = {k: v.clone() for k, v in model.state_dict().items()}
 
-        # We'll compute the gradient for each task using a random batch
-        gradients_list = []
-        layerwise_gradients_dict_of_lists = {layer_name: [] for (_, layer_name) in self.layers_order}
+        # Prepare lists that will hold gradients for each task (some will be None for the current task)
+        gradients_list = [None] * len(self.task_train_loaders)
+        layerwise_gradients_dict_of_lists = {
+            layer_name: [None] * len(self.task_train_loaders) for (_, layer_name) in self.layers_order
+        }
 
+        # Compute gradients for tasks != curr_task_num
         for task_num in range(len(self.task_train_loaders)):
+            if task_num == curr_task_num:
+                # Skip measuring the current task
+                continue
+
             batch_x, batch_y = self._get_random_batch(task_num)
             g_global, g_layers = self._compute_gradients_for_all_layers(model, batch_x, batch_y)
 
-            # Store the global gradient
-            gradients_list.append(g_global.detach().cpu().numpy())
-
-            # Store each layer's gradient
+            gradients_list[task_num] = g_global.detach().cpu().numpy()
             for layer_name in g_layers:
-                layerwise_gradients_dict_of_lists[layer_name].append(g_layers[layer_name].detach().cpu().numpy())
+                layerwise_gradients_dict_of_lists[layer_name][task_num] = g_layers[layer_name].detach().cpu().numpy()
 
-            # Restore model weights after each gradient so we don't accumulate
+            # Restore model weights
             model.load_state_dict(current_state)
 
-        new_global_gradients = np.array(gradients_list)  # [tasks, total_params]
+        # Convert to numpy array, filling None entries (current task) with zeros
+        valid_global_grad = next((g for g in gradients_list if g is not None), None)
+        if valid_global_grad is None:
+            return  # No valid gradient at all (unlikely, unless there's only one task)
+
+        for i, g in enumerate(gradients_list):
+            if g is None:
+                gradients_list[i] = np.zeros_like(valid_global_grad)  # fill skipped task slot with zeros
+
+        new_global_gradients = np.stack(gradients_list, axis=0)  # shape: [tasks, total_params]
         new_global_gradients = np.expand_dims(new_global_gradients, axis=0)  # [1, tasks, total_params]
 
         if self.gradients is not None:
@@ -184,9 +191,16 @@ class GradientAlignment(Metric):
         else:
             self.gradients = new_global_gradients
 
-        # Handle each layer
-        for layers, layer_name in self.layers_order:
-            layerwise_array = np.array(layerwise_gradients_dict_of_lists[layer_name])  # [tasks, layer_params]
+        # Handle each layer similarly, filling None with zeros
+        for _, layer_name in self.layers_order:
+            layer_list = layerwise_gradients_dict_of_lists[layer_name]
+            valid_layer_grad = next((g for g in layer_list if g is not None), None)
+            if valid_layer_grad is None:
+                continue
+            for i, g in enumerate(layer_list):
+                if g is None:
+                    layer_list[i] = np.zeros_like(valid_layer_grad)
+            layerwise_array = np.stack(layer_list, axis=0)  # [tasks, layer_params]
             layerwise_array = np.expand_dims(layerwise_array, axis=0)  # [1, tasks, layer_params]
 
             if self.layerwise_gradients[layer_name] is not None:
@@ -196,7 +210,6 @@ class GradientAlignment(Metric):
             else:
                 self.layerwise_gradients[layer_name] = layerwise_array
 
-        # Restore model
         model.load_state_dict(current_state)
 
     def before_task(self, model, task_num, train_loader, test_loader):
@@ -262,28 +275,72 @@ class GradientAlignment(Metric):
         global_similarities = np.zeros((num_tasks, num_tasks))
         for i in range(num_tasks):
             for j in range(num_tasks):
-                similarities = cosine_similarity(self.gradients[:, i, :], self.gradients[:, j, :])
-                if i == j:
-                    # exclude self-similarity on the diagonal by masking
-                    mask = np.ones(similarities.shape, dtype=bool)
-                    np.fill_diagonal(mask, 0)
-                    global_similarities[i][j] = np.mean(similarities[mask])
-                else:
-                    global_similarities[i][j] = np.mean(similarities)
+                # Collect all timesteps where task i has non-zero grads
+                i_indices = [t for t in range(self.gradients.shape[0]) if not np.allclose(self.gradients[t, i], 0)]
+                # Collect all timesteps where task j has non-zero grads
+                j_indices = [t for t in range(self.gradients.shape[0]) if not np.allclose(self.gradients[t, j], 0)]
 
-        # Compute per-layer average similarities
+                # ============ Diagonal case (i == i) ============
+                if i == j:
+                    # If there's fewer than 2 time steps, we can't form pairs
+                    if len(i_indices) < 2:
+                        global_similarities[i, i] = 0.0
+                    else:
+                        # Compare each pair of (i_indices) among themselves
+                        grads_i = self.gradients[i_indices, i, :]  # shape: [N, D]
+                        sims_ii = cosine_similarity(grads_i, grads_i)  # [N, N]
+
+                        # Optionally exclude each vector's self-sim on the diagonal
+                        mask = np.ones_like(sims_ii, dtype=bool)
+                        np.fill_diagonal(mask, 0)
+                        if np.any(mask):
+                            global_similarities[i, i] = np.mean(sims_ii[mask])
+                        else:
+                            global_similarities[i, i] = 0.0
+
+                # ============ Off-diagonal (i != j) ============
+                else:
+                    # If either i_indices or j_indices is empty => no data => sim = 0
+                    if len(i_indices) == 0 or len(j_indices) == 0:
+                        global_similarities[i, j] = 0.0
+                    else:
+                        grads_i = self.gradients[i_indices, i, :]
+                        grads_j = self.gradients[j_indices, j, :]
+                        sims_ij = cosine_similarity(grads_i, grads_j)  # [len(i_indices), len(j_indices)]
+                        global_similarities[i, j] = np.mean(sims_ij)
+
+        # 2) Layerwise similarity calculation:
         layerwise_similarities = np.zeros((len(self.layers_order), num_tasks, num_tasks))
         for idx, (layer_list, layer_name) in enumerate(self.layers_order):
-            layer_array = self.layerwise_gradients[layer_name]  # [time, tasks, layer_params]
+            layer_array = self.layerwise_gradients[layer_name]  # shape: [time, tasks, layer_params]
+
             for i in range(num_tasks):
                 for j in range(num_tasks):
-                    similarities = cosine_similarity(layer_array[:, i, :], layer_array[:, j, :])
+                    i_indices = [t for t in range(layer_array.shape[0]) if not np.allclose(layer_array[t, i], 0)]
+                    j_indices = [t for t in range(layer_array.shape[0]) if not np.allclose(layer_array[t, j], 0)]
+
                     if i == j:
-                        mask = np.ones(similarities.shape, dtype=bool)
-                        np.fill_diagonal(mask, 0)
-                        layerwise_similarities[idx, i, j] = np.mean(similarities[mask])
+                        # Intra-task (compare each time step for task i to itself)
+                        if len(i_indices) < 2:
+                            layerwise_similarities[idx, i, i] = 0.0
+                        else:
+                            grads_i = layer_array[i_indices, i, :]
+                            sims_ii = cosine_similarity(grads_i, grads_i)
+                            mask = np.ones_like(sims_ii, dtype=bool)
+                            np.fill_diagonal(mask, 0)
+                            if np.any(mask):
+                                layerwise_similarities[idx, i, i] = np.mean(sims_ii[mask])
+                            else:
+                                layerwise_similarities[idx, i, i] = 0.0
                     else:
-                        layerwise_similarities[idx, i, j] = np.mean(similarities)
+                        # Off-diagonal
+                        if len(i_indices) == 0 or len(j_indices) == 0:
+                            layerwise_similarities[idx, i, j] = 0.0
+                        else:
+                            grads_i = layer_array[i_indices, i, :]
+                            grads_j = layer_array[j_indices, j, :]
+                            sims_ij = cosine_similarity(grads_i, grads_j)
+                            layerwise_similarities[idx, i, j] = np.mean(sims_ij)
 
         min_sim = min(min_sim, np.min(global_similarities), np.min(layerwise_similarities))
         max_sim = max(max_sim, np.max(global_similarities), np.max(layerwise_similarities))

@@ -15,15 +15,20 @@ Every run of *main.py* correponds to a single seed run of an experiment. In orde
 
 Therefore, we have simple manually written scripts to run every experiment. Every script runs the experiments for some number of random seeds. The number of seeds varies from experiment to experiment purely due to strong computational constraints.
 
-**Running all experiments**. You can use `bash run-all-experiments.sh` to run all of the following experiments at once.
+### **Running all experiments**. 
+You can use `bash run-all-experiments.sh` to run all of the following experiments at once.
 
-**Task size experiment**. `bash experiment-task-size.sh`. Effectively calls main.py with `--dataset_size <5/10/20/50> --cl_epochs 15 --probing_epochs 35` flags. Check the script for all parameters.
+### **Task size experiment**. 
+`bash experiment-task-size.sh`. Effectively calls main.py with `--dataset_size <5/10/20/50> --cl_epochs 15 --probing_epochs 35` flags. Check the script for all parameters.
 
-**Full replay experiment**. `bash experiment-full-replay.sh`. Effectively calls main.py with `--dataset_size <5/10/20/50> --cl_epochs 15 --probing_epochs 35 --use_replay --replay_buffer_size 30 --replay_batch_size 16` flags. 
+### **Full replay experiment**. 
+`bash experiment-full-replay.sh`. Effectively calls main.py with `--dataset_size <5/10/20/50> --cl_epochs 15 --probing_epochs 35 --use_replay --replay_buffer_size 30 --replay_batch_size 16` flags. 
 
-**Limited replay experiment**. `bash experiment-limited-replay.sh`. Effectively calls main.py with `--dataset_size <5/10/20/50> --cl_epochs 15 --probing_epochs 35 --use_replay --replay_buffer_size 30 --replay_batch_size 16 --limited_replay --task_limit <1/2/3/4>` flags.
+### **Limited replay experiment**. 
+`bash experiment-limited-replay.sh`. Effectively calls main.py with `--dataset_size <5/10/20/50> --cl_epochs 15 --probing_epochs 35 --use_replay --replay_buffer_size 30 --replay_batch_size 16 --limited_replay --task_limit <1/2/3/4>` flags.
 
-**Gradients experiment**. `bash experiment-gradients.sh`. Effectively calls main.py with `--dataset_size <5/10/20/50> --cl_epochs 50 --use_gradient_alignment` flags.
+### **Gradients experiment**. 
+`bash experiment-gradients.sh`. Effectively calls main.py with `--dataset_size <5/10/20/50> --cl_epochs 50 --use_gradient_alignment` flags.
 
 
 # Understanding the Codebase

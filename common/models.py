@@ -149,13 +149,13 @@ class SemanticCNN(nn.Module):
 
 
 class CIFAR_CNN_1(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes):
         super(CIFAR_CNN_1, self).__init__()
         self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.fc1 = nn.Linear(64 * 4 * 4, 64)
-        self.fc2 = nn.Linear(64, 100)
+        self.fc2 = nn.Linear(64, num_classes)
         self.dropout = nn.Dropout(0.5)
         self.pool = nn.MaxPool2d(2, 2)
 

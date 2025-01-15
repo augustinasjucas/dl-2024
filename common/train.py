@@ -6,6 +6,7 @@ from common.utils import simple_test
 import copy
 from common.metrics import Metric
 import wandb
+from common.replay_methods import SimpleReplay
 
 class CLTraining:
     def __init__(self,
@@ -17,7 +18,8 @@ class CLTraining:
             tasks: List[Tuple[DataLoader, DataLoader]],
             epochs: int,
             description: str = "No description",
-            wandb_params: dict = None
+            wandb_params: dict = None,
+            replay=None,
         ):
         """Creates a CL Training object. For now, the full purpose of this object is that you can call run() on it.
         So in principle, imagine that you would just call run() with all of these parameters.
@@ -33,6 +35,7 @@ class CLTraining:
             description (str, optional): A description of this training run, used for better results, wandb. This could include
                                          stuff such as the model architecture, the tasks descriptions, etc.
             wandb_params (dict, optional): The parameters to pass to wandb.init
+            replay: The replay object to use. If None, no replay method is used.
         """
         self.model = model
         self.optimizer = optimizer
@@ -42,10 +45,10 @@ class CLTraining:
         self.epochs = epochs
         self.description = description
         self.wandb_params = wandb_params
-
+        self.replay = replay
         self.metrics = metrics
 
-    def train(self, model, train_loader, optimizer_type, optimizer_parameters, criterion, epochs, task_index, metrics, device):
+    def train(self, model, train_loader, optimizer_type, optimizer_parameters, criterion, epochs, task_index, metrics, device, replay=None):
         # Performs vanilla training on the model, and given data and all needed info
 
         # Copy the optimizer
@@ -61,6 +64,13 @@ class CLTraining:
 
             for batch_num, (batch_x, batch_y) in enumerate(train_loader):
                 batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+
+                # If replay is to be used, add some replayed samples to the batch
+                if replay is not None:
+                    replay_x, replay_y = replay.sample_batch()
+                    if replay_x is not None:
+                        batch_x = torch.cat((batch_x, replay_x.to(device)))
+                        batch_y = torch.cat((batch_y, replay_y.to(device)))
 
                 batch_pred = model(batch_x)
                 loss = criterion(batch_pred, batch_y)
@@ -101,7 +111,11 @@ class CLTraining:
                 metric.before_task(self.model, task_index, train_loader, test_loader)
 
             # Perform simple training
-            self.train(self.model, train_loader, self.optimizer[0], self.optimizer[1], self.criterion, self.epochs, task_index, self.metrics, self.device)
+            self.train(self.model, train_loader, self.optimizer[0], self.optimizer[1], self.criterion, self.epochs, task_index, self.metrics, self.device, self.replay)
+
+            # Add replay!
+            if self.replay is not None:
+                self.replay.add_by_loader(train_loader)
 
             # Inform the metrics of this task
             for metric in self.metrics:

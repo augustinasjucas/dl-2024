@@ -24,15 +24,18 @@ def simple_test(model: torch.nn.Module, test_loader: DataLoader, criterion, devi
     return test_loss, accuracy
 
 
-def simple_train(model, train_loader, optimizer, criterion, epochs, device, wandb_log_path: str = None):
+def simple_train(model, train_loader, optimizer, criterion, epochs, device, wandb_log_path: str = None, test_loader=None):
     # Performs vanilla training on the model, and given data and all needed info
 
     model.train()
 
+    best_acc, best_loss = 0, float("inf")
     for epoch_num in range(epochs):
         epoch_acc, epoch_loss = 0, 0
         for batch_num, (batch_x, batch_y) in enumerate(train_loader):
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+
+            # print("xs are:", batch_x, flush=True)
 
             batch_pred = model(batch_x)
             loss = criterion(batch_pred, batch_y)
@@ -48,5 +51,18 @@ def simple_train(model, train_loader, optimizer, criterion, epochs, device, wand
         epoch_loss /= len(train_loader.dataset)
         epoch_acc /= len(train_loader.dataset)
 
+        if test_loader is not None:
+            test_loss, test_acc = simple_test(model, test_loader, criterion, device)
+            test_data = {f"{wandb_log_path}intermediate_test_loss": test_loss, f"{wandb_log_path}intermediate_test_accuracy": test_acc}
+
+            if test_acc > best_acc:
+                best_acc = test_acc
+            if test_loss < best_loss:
+                best_loss = test_loss
+        else:
+            test_data = {}
+
         if wandb_log_path is not None:
-            wandb.log({f"{wandb_log_path}loss": epoch_loss, f"{wandb_log_path}accuracy": epoch_acc})
+            wandb.log({f"{wandb_log_path}intermediate_train_loss": epoch_loss, f"{wandb_log_path}intermediate_train_accuracy": epoch_acc, **test_data})
+
+    return best_loss, best_acc

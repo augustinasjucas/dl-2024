@@ -1,7 +1,13 @@
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 from tqdm import tqdm
+import numpy as np
+import os
+import zipfile
+import requests
+from torchvision import datasets, transforms
+import random
 
 def get_mnist():
     transform = transforms.Compose([
@@ -14,6 +20,76 @@ def get_mnist():
     full_test_dataset = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
 
     return full_train_dataset, full_test_dataset
+
+def download_and_extract_tiny_imagenet(dataset_dir):
+    url = "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
+    zip_path = os.path.join(dataset_dir, "tiny-imagenet-200.zip")
+
+    # Create dataset directory if it doesn't exist
+    if not os.path.exists(dataset_dir):
+        os.makedirs(dataset_dir)
+
+    # Download the dataset if the ZIP file doesn't exist
+    if not os.path.exists(zip_path):
+        print("Downloading Tiny ImageNet dataset...")
+        response = requests.get(url, stream=True)
+        with open(zip_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:
+                    f.write(chunk)
+        print("Download complete.")
+
+    # Extract the dataset if the folder isn't already present
+    extract_dir = os.path.join(dataset_dir, "tiny-imagenet-200")
+    if not os.path.exists(extract_dir):
+        print("Extracting Tiny ImageNet dataset...")
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(dataset_dir)
+        print("Extraction complete.")
+    else:
+        print("Dataset already extracted.")
+
+def get_tiny_imagenet():
+    dataset_dir = "./data"
+    download_and_extract_tiny_imagenet(dataset_dir)
+
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        # resize to 32 32
+        transforms.Resize([32, 32])
+    ])
+
+    # Define paths for train and validation datasets
+    train_dir = os.path.join(dataset_dir, "tiny-imagenet-200", "train")
+    val_dir = os.path.join(dataset_dir, "tiny-imagenet-200", "val")
+
+    # Load the datasets
+    full_train_dataset = datasets.ImageFolder(root=train_dir, transform=transform)
+    full_test_dataset = datasets.ImageFolder(root=val_dir, transform=transform)
+
+    return full_train_dataset, full_test_dataset
+
+def get_SVHN(set_one_class=False, new_label=100):
+    """
+    Args:
+        - set_one_class (bool): If true, all the labels get set to `new_label`
+        - new_label (int): The label to assign all data if set_one_class is specified
+    """
+    transform = transforms.Compose([
+        transforms.ToTensor(),  # Converts PIL image to Tensor
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # Example normalization
+    ])
+    
+    full_train_dataset = datasets.SVHN(root='./data', split='train', download=True, transform=transform)
+    full_test_dataset = datasets.SVHN(root='./data', split='test', download=True, transform=transform)
+
+    if set_one_class:
+        full_train_dataset.labels = np.full_like(full_train_dataset.labels, new_label)
+        full_test_dataset.labels = np.full_like(full_test_dataset.labels, new_label)
+    
+    return full_train_dataset, full_test_dataset
+
 
 def get_cifar(version='10'):
     """
@@ -74,7 +150,7 @@ class Tasks():
 
     def get_tasks_zipped(self, batch_size):
         # zips the train and test loaders
-        return list(zip(self.get_train_loaders(batch_size), self.get_test_loaders(batch_size)))
+        return list(zip(self.get_train_loaders(batch_size, shuffle=True), self.get_test_loaders(batch_size)))
 
 
     def get_task_name(self, i):
@@ -125,6 +201,48 @@ class FiveImageTasksCifar(Tasks):
             self.names.append(class_name)
         return datasets
 
+
+class FiveImageTasksCifar10(Tasks):
+    # add an argument: max_elems_per_class
+    def __init__(self, train_dataset, test_dataset, max_elems_per_class=100):
+        self.max_elems_per_class = max_elems_per_class
+        super().__init__(train_dataset, test_dataset)
+
+
+    # Split the dataset into 100/5 = 20 sub-datasets. Each sub-dataset contains images of a five classes
+    def split_dataset(self, dataset):
+        datasets = []
+        self.names = []
+        for i in range(0, 10, 5):
+            indices = []
+            for j in range(i, i+5):
+                indices.extend(torch.where(torch.tensor(dataset.targets) == j)[0][:self.max_elems_per_class])
+            indices = torch.tensor(indices)
+            datasets.append(torch.utils.data.Subset(dataset, indices))
+            class_name = ", ".join([dataset.classes[j] for j in range(i, i+5)])
+            self.names.append(class_name)
+        return datasets
+
+class FiveImageTasksCifarMaxElems(Tasks):
+    def __init__(self, train_dataset, test_dataset, max_elems_per_class=100):
+        self.max_elems_per_class = max_elems_per_class
+        super().__init__(train_dataset, test_dataset)
+
+    # Split the dataset into 100/5 = 20 sub-datasets. Each sub-dataset contains images of a five classes
+    def split_dataset(self, dataset):
+        datasets = []
+        self.names = []
+        for i in range(0, 100, 5):
+            indices = []
+            for j in range(i, i+5):
+                indices.extend(torch.where(torch.tensor(dataset.targets) == j)[0][:self.max_elems_per_class])
+            indices = torch.tensor(indices)
+            datasets.append(torch.utils.data.Subset(dataset, indices))
+            class_name = ", ".join([dataset.classes[j] for j in range(i, i+5)])
+            self.names.append(class_name)
+        return datasets
+
+
 class TenImageTasksCifar(Tasks):
     # Split the dataset into 100/5 = 20 sub-datasets. Each sub-dataset contains images of a five classes
     def split_dataset(self, dataset):
@@ -162,6 +280,28 @@ class FiftyImageTasksCifar(Tasks):
             self.names.append(class_name)
         return datasets
 
+class OneImageTasksCifar(Tasks):
+    def split_dataset(self, dataset):
+        datasets = []
+        self.names = []
+        for i in range(0, 100, 1):
+            indices = torch.where((torch.tensor(dataset.targets) >= i) & (torch.tensor(dataset.targets) < i+1))[0]
+            datasets.append(torch.utils.data.Subset(dataset, indices))
+            class_name = ", ".join([dataset.classes[j] for j in range(i, i+1)])
+            self.names.append(class_name)
+        return datasets
+
+class TwoImageTasksCifar(Tasks):
+    def split_dataset(self, dataset):
+        datasets = []
+        self.names = []
+        for i in range(0, 100, 2):
+            indices = torch.where((torch.tensor(dataset.targets) >= i) & (torch.tensor(dataset.targets) < i+2))[0]
+            datasets.append(torch.utils.data.Subset(dataset, indices))
+            class_name = ", ".join([dataset.classes[j] for j in range(i, i+2)])
+            self.names.append(class_name)
+        return datasets
+
 
 class GPUDataset(torch.utils.data.Dataset):
     def __init__(self, dataset):
@@ -177,3 +317,72 @@ class GPUDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.items)
+
+
+class RandomClassTasksCifar(Tasks):
+    def __init__(self, train_dataset, test_dataset, task_size, random_seed=None):
+        # This ensures reproducibility if needed
+        if random_seed is not None:
+            random.seed(random_seed)
+
+        self.task_size = task_size
+
+        # Shuffle classes once here
+        self.all_classes = list(range(100))  # CIFAR-100 classes: 0..99
+        random.shuffle(self.all_classes)
+
+        super().__init__(train_dataset, test_dataset)
+
+    def split_dataset(self, dataset):
+        datasets = []
+        self.names = []
+
+        # Use the same shuffled class ordering for train and test
+        for start in range(0, 100, self.task_size):
+            end = start + self.task_size
+            class_chunk = self.all_classes[start:end]
+
+            # Collect indices of all images in these classes
+            chunk_indices = []
+            for idx, target in enumerate(dataset.targets):
+                # Make sure target is the same type as class_chunk
+                if target in class_chunk:
+                    chunk_indices.append(idx)
+
+            subset = torch.utils.data.Subset(dataset, chunk_indices)
+            datasets.append(subset)
+
+            # Create a user-friendly name
+            chunk_class_names = [dataset.classes[c] for c in class_chunk]
+            self.names.append(", ".join(chunk_class_names))
+
+        return datasets
+
+
+
+class WhiteNoiseDataset(Dataset):
+    def __init__(self, num_samples, image_size, num_classes):
+        """
+        Args:
+            num_samples (int): Total number of samples in the dataset.
+            image_size (tuple): Shape of the images, e.g., (3, 32, 32) for RGB images.
+            num_classes (int): Number of classes for the labels.
+        """
+        self.num_samples = num_samples
+        self.image_size = image_size
+        self.num_classes = num_classes
+        self.data = torch.rand((num_samples, *image_size))  # Random white noise images
+        self.targets = torch.randint(0, num_classes, (num_samples,))  # Random labels for classes
+        self.classes = [f"Class {i}" for i in range(num_classes)]  # Class names
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        return self.data[idx], self.targets[idx]
+
+
+def get_white_noise(num_samples=50000, num_classes=100, image_size=(3, 32, 32)):
+    train_dataset = WhiteNoiseDataset(num_samples, image_size, num_classes)
+    test_dataset = WhiteNoiseDataset(num_samples // 5, image_size, num_classes)
+    return train_dataset, test_dataset

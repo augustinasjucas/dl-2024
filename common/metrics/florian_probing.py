@@ -16,7 +16,8 @@ class FlorianProbing(Metric):
                  batch_size: int = 256,
                  device: str = "cuda",
                  wandb_params: dict = None,
-                 sweepy_logging: bool = False
+                 sweepy_logging: bool = False,
+                 custom_probing_dataloaders = None
             ):
         """
         ==== NOTE: it is CRUCIAL that you dont change the "model" class inside. For instance, do not change the code of this class to model = model.to(device).
@@ -44,6 +45,7 @@ class FlorianProbing(Metric):
         self.epochs = epochs
         self.wandb_params = wandb_params
         self.sweepy_logging = sweepy_logging
+        self.custom_probing_dataloaders = custom_probing_dataloaders
 
         super().__init__(
             "Florian Probing",
@@ -64,8 +66,11 @@ class FlorianProbing(Metric):
     def after_all_tasks(self, model, tasks: List[Tuple[DataLoader, DataLoader]]):
 
         # Construct a full train and test loader with all data from all tasks
-        full_train_loader = DataLoader(torch.utils.data.ConcatDataset([task[0].dataset for task in tasks]), batch_size=self.batch_size, shuffle=True)
-        full_test_loader = DataLoader(torch.utils.data.ConcatDataset([task[1].dataset for task in tasks]), batch_size=self.batch_size, shuffle=True)
+        if self.custom_probing_dataloaders is None:
+            full_train_loader = DataLoader(torch.utils.data.ConcatDataset([task[0].dataset for task in tasks[:-1]]), batch_size=self.batch_size, shuffle=True)
+            full_test_loader = DataLoader(torch.utils.data.ConcatDataset([task[1].dataset for task in tasks[:-1]]), batch_size=self.batch_size, shuffle=True)
+        else:
+            full_train_loader, full_test_loader = self.custom_probing_dataloaders
 
         all_layers_to_freeze = []
 
@@ -84,7 +89,9 @@ class FlorianProbing(Metric):
 
             # first, freeze all needed layers
             for layer in all_layers_to_freeze:
-                layer.requires_grad = False
+                for param in layer.parameters():
+                    param.requires_grad = False
+
             # then reset the parameters of all layers that are not frozen
             for layer in self.all_layers:
                 if layer not in all_layers_to_freeze:
@@ -92,7 +99,7 @@ class FlorianProbing(Metric):
 
             # now train the model on all data from all tasks
             optimizer = self.optimizer[0](model.parameters(), **self.optimizer[1])
-            simple_train(model, full_train_loader, optimizer, self.criterion, self.epochs, self.device, f"metrics-florian_probing/intermediate-training-results/{sweepy_string}")
+            best_loss, best_acc = simple_train(model, full_train_loader, optimizer, self.criterion, self.epochs, self.device, f"metrics-florian_probing/intermediate-training-results/{sweepy_string}", test_loader=full_test_loader)
             loss, acc  = simple_test(model, full_test_loader,  self.criterion, self.device)
             loss_train, acc_train = simple_test(model, full_train_loader,  self.criterion, self.device)
 
@@ -100,9 +107,9 @@ class FlorianProbing(Metric):
             self.results.append((name, acc, loss, acc_train, loss_train))
 
             wandb.log({
-                f"metrics-florian_probing/final-results/{sweepy_string}test-accuracy": acc, f"metrics-florian_probing/final-results/{sweepy_string}test-loss": loss,
+                f"metrics-florian_probing/final-results/{sweepy_string}test-accuracy-last": acc, f"metrics-florian_probing/final-results/{sweepy_string}test-loss-last": loss,
                 f"metrics-florian_probing/final-results/{sweepy_string}train-accuracy": acc_train, f"metrics-florian_probing/final-results/{sweepy_string}train-loss": loss_train,
-                f"metrics-florian_probing/final-results/{sweepy_string}layer-index": len(self.results) - 1
+                f"metrics-florian_probing/final-results/{sweepy_string}test-accuracy-best": best_acc, f"metrics-florian_probing/final-results/{sweepy_string}test-loss-best": best_loss,
             })
 
             if not self.sweepy_logging:

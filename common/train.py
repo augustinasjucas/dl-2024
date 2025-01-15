@@ -56,9 +56,8 @@ class CLTraining:
         # Copy the optimizer
         optimizer = optimizer_type(model.parameters(), **optimizer_parameters)
 
-        model.train()
-
         for epoch_num in range(epochs):
+            model.train()
 
             # Inform the metrics of this epoch
             for metric in metrics:

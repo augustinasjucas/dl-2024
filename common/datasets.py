@@ -1,7 +1,8 @@
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 from tqdm import tqdm
+import random
 
 
 def get_mnist():
@@ -41,6 +42,12 @@ def get_cifar(version="10"):
     return full_train_dataset, full_test_dataset
 
 
+def get_white_noise(num_samples=50000, num_classes=100, image_size=(3, 32, 32)):
+    train_dataset = WhiteNoiseDataset(num_samples, image_size, num_classes)
+    test_dataset = WhiteNoiseDataset(num_samples // 5, image_size, num_classes)
+    return train_dataset, test_dataset
+
+
 # Define a class for storing tasks split. It stores training dataset and validation dataset.
 # The initializer takes the training dataset and validation dataset as input and
 # images of a single digit. Same for validation dataset. Implemeting classes need to implement the split_dataset method.
@@ -51,6 +58,9 @@ class Tasks:
         self.test_dataset = test_dataset
         self.train_datasets = self.split_dataset(train_dataset)
         self.test_datasets = self.split_dataset(test_dataset)
+
+    def split_dataset(self, dataset):
+        raise NotImplementedError("Implement this method in the subclass")
 
     # Methods for getting train and test loaders
     def get_train_loaders(self, batch_size, shuffle=False):
@@ -159,6 +169,68 @@ class FiftyImageTasksCifar(Tasks):
             class_name = ", ".join([dataset.classes[j] for j in range(i, i + 50)])
             self.names.append(class_name)
         return datasets
+
+
+class RandomClassTasksCifar(Tasks):
+    def __init__(self, train_dataset, test_dataset, task_size, random_seed=None):
+        # This ensures reproducibility if needed
+        if random_seed is not None:
+            random.seed(random_seed)
+
+        self.task_size = task_size
+
+        # Shuffle classes once here
+        self.all_classes = list(range(100))  # CIFAR-100 classes: 0..99
+        random.shuffle(self.all_classes)
+
+        super().__init__(train_dataset, test_dataset)
+
+    def split_dataset(self, dataset):
+        datasets = []
+        self.names = []
+
+        # Use the same shuffled class ordering for train and test
+        for start in range(0, 100, self.task_size):
+            end = start + self.task_size
+            class_chunk = self.all_classes[start:end]
+
+            # Collect indices of all images in these classes
+            chunk_indices = []
+            for idx, target in enumerate(dataset.targets):
+                # Make sure target is the same type as class_chunk
+                if target in class_chunk:
+                    chunk_indices.append(idx)
+
+            subset = torch.utils.data.Subset(dataset, chunk_indices)
+            datasets.append(subset)
+
+            # Create a user-friendly name
+            chunk_class_names = [dataset.classes[c] for c in class_chunk]
+            self.names.append(", ".join(chunk_class_names))
+
+        return datasets
+
+
+class WhiteNoiseDataset(Dataset):
+    def __init__(self, num_samples, image_size, num_classes):
+        """
+        Args:
+            num_samples (int): Total number of samples in the dataset.
+            image_size (tuple): Shape of the images, e.g., (3, 32, 32) for RGB images.
+            num_classes (int): Number of classes for the labels.
+        """
+        self.num_samples = num_samples
+        self.image_size = image_size
+        self.num_classes = num_classes
+        self.data = torch.rand((num_samples, *image_size))  # Random white noise images
+        self.targets = torch.randint(0, num_classes, (num_samples,))  # Random labels for classes
+        self.classes = [f"Class {i}" for i in range(num_classes)]  # Class names
+
+    def __len__(self):
+        return self.num_samples
+
+    def __getitem__(self, idx):
+        return self.data[idx], self.targets[idx]
 
 
 class GPUDataset(torch.utils.data.Dataset):

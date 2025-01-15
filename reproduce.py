@@ -4,7 +4,9 @@ from common.datasets import (
     TenImageTasksCifar,
     TwentyImageTasksCifar,
     FiftyImageTasksCifar,
+    RandomClassTasksCifar,
     get_cifar,
+    get_white_noise,
 )
 from common.metrics.florian_probing import FlorianProbing
 from common.metrics.gradients import GradientAlignment
@@ -12,9 +14,10 @@ from common.metrics.logging import BeautifulLogging, SweepyLogging
 from common.models import CIFAR_CNN_1
 from common.train import CLTraining
 import wandb
+from fire import Fire
 
 
-def run_experiment(project_name="test", wandb_logging=True):
+def run_experiment(project_name="test", task_size=20, wandb_logging=True):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Here, define the common wandb parameters that will be called on wandb.init() in the CLTraining and
@@ -31,11 +34,13 @@ def run_experiment(project_name="test", wandb_logging=True):
         wandb.init(mode="disabled")
 
     # Get the raw dataset
-    full_train_dataset_cifar100, full_test_dataset_cifar100 = get_cifar("100")
+    full_train_dataset, full_test_dataset = get_cifar("100")
+    # full_train_dataset, full_test_dataset = get_white_noise(num_samples=50000, num_classes=100, image_size=(3, 32, 32))
 
     # Get the tasks dataset. Look at how these are implemented and just add new classes if you need to.
     batch_size = 256
-    task = FiveImageTasksCifar(full_train_dataset_cifar100, full_test_dataset_cifar100)
+
+    task = RandomClassTasksCifar(full_train_dataset, full_test_dataset, task_size=task_size)
     tasks_zipped = task.get_tasks_zipped(batch_size=batch_size)
     train_loaders = task.get_train_loaders(batch_size=batch_size, shuffle=True)
 
@@ -76,7 +81,7 @@ def run_experiment(project_name="test", wandb_logging=True):
         task_train_loaders=train_loaders,
         criterion=torch.nn.CrossEntropyLoss(),
         device=device,
-        check_every=40,  # e.g., every 1 epoch
+        check_every=100,  # e.g., every 1 batch
         wandb_params=wandb_params,
     )
 
@@ -93,7 +98,7 @@ def run_experiment(project_name="test", wandb_logging=True):
         model=model,
         # Define the parameters for training every task (same criterion and same # of epochs for all tasks)
         criterion=torch.nn.CrossEntropyLoss(),
-        epochs=60,
+        epochs=80,
         device=device,
         # Define the optimizer. It is done like this, so that I can reinitialize the optimizer for every task.
         # NOTE: this might not be optimal -> >>!
@@ -128,4 +133,4 @@ if __name__ == "__main__":
     # sweep_id = wandb.sweep(sweep=sweep_configuration, project="stupid-sweep")
     # wandb.agent(sweep_id, function=main, count=10)
 
-    run_experiment("gradients-five-images", wandb_logging=True)
+    Fire(run_experiment)

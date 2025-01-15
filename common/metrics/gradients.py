@@ -49,12 +49,11 @@ class GradientAlignment(Metric):
         # A global counter for batches (across tasks)
         self.global_batch_count = 0
 
-    def _get_random_batch(self, loader):
-        """
-        Utility to grab a random batch from a DataLoader.
-        """
-        data_iter = iter(loader)
-        x, y = next(data_iter)
+        # Utilities for random batch sampling
+        self.current_epoch_iterators = {}
+
+    def _get_random_batch(self, task_num):
+        x, y = next(self.current_epoch_iterators[task_num])
         return x.to(self.device), y.to(self.device)
 
     def _compute_gradient(self, model, x, y):
@@ -158,14 +157,13 @@ class GradientAlignment(Metric):
 
         # Save the current model state for safe reversion
         current_state = {k: v.clone() for k, v in model.state_dict().items()}
-        model.train()
 
         # We'll compute the gradient for each task using a random batch
         gradients_list = []
         layerwise_gradients_dict_of_lists = {layer_name: [] for (_, layer_name) in self.layers_order}
 
-        for loader in self.task_train_loaders:
-            batch_x, batch_y = self._get_random_batch(loader)
+        for task_num in range(len(self.task_train_loaders)):
+            batch_x, batch_y = self._get_random_batch(task_num)
             g_global, g_layers = self._compute_gradients_for_all_layers(model, batch_x, batch_y)
 
             # Store the global gradient
@@ -209,8 +207,10 @@ class GradientAlignment(Metric):
         # Save the current model state
         current_state = {k: v.clone() for k, v in model.state_dict().items()}
 
-        model.train()
-        x, y = self._get_random_batch(train_loader)
+        # Get a random batch for this task
+        x, y = next(iter(train_loader))
+        x, y = x.to(self.device), y.to(self.device)
+
         g = self._compute_gradient(model, x, y)
 
         # Compute norms
@@ -235,6 +235,10 @@ class GradientAlignment(Metric):
 
         # Restore model
         model.load_state_dict(current_state)
+
+    def before_epoch(self, model, task_num, epoch_num):
+        for i, loader in enumerate(self.task_train_loaders):
+            self.current_epoch_iterators[i] = iter(loader)
 
     def after_task(self, model, task_num, train_loader, test_loader):
         pass
@@ -345,7 +349,7 @@ class GradientAlignment(Metric):
             global_step_name = "metrics-gradients/measurement-step"
             wandb.define_metric(global_step_name)
 
-            wandb.log({"metrics-gradients/input_grad_norm": self.input_grad_norms[i]})
+            wandb.log({"metrics-gradients/input_gradient_magnitude": self.input_grad_norms[i]})
             wandb.log(
                 {
                     "metrics-gradients/initial_magnitude_normalized": self.initial_gradient_magnitudes_normalized[i],
